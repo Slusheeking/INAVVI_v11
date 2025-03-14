@@ -12,9 +12,13 @@ import time
 import logging
 import threading
 import copy
-import requests
 import numpy as np
 from sqlalchemy import create_engine, text
+
+from src.utils.logging.logger import get_logger
+
+# Set up logger for this module
+logger = get_logger("system_components")
 
 # System Controller Components
 class StateManager:
@@ -24,6 +28,7 @@ class StateManager:
         self.state_file = state_file
         self.state = self.load_state() or {}
         self.lock = threading.Lock()
+        self.logger = get_logger("system_components.state_manager")
         
     def get_state(self):
         """Get the current state."""
@@ -43,7 +48,7 @@ class StateManager:
                 with open(self.state_file, 'w') as f:
                     json.dump(self.state, f)
             except Exception as e:
-                logging.error(f"Error persisting state: {e}")
+                self.logger.error(f"Error persisting state: {e}")
                 
     def load_state(self):
         """Load the state from disk."""
@@ -52,7 +57,7 @@ class StateManager:
                 with open(self.state_file, 'r') as f:
                     return json.load(f)
         except Exception as e:
-            logging.error(f"Error loading state: {e}")
+            logger.error(f"Error loading state: {e}")
         return {}
         
     def reset_state(self):
@@ -69,7 +74,7 @@ class HealthMonitor:
         self.check_interval = check_interval
         self.running = False
         self.thread = None
-        self.logger = logging.getLogger("health_monitor")
+        self.logger = get_logger("system_components.health_monitor")
         
     def register_subsystem(self, name, subsystem):
         """Register a subsystem for health monitoring."""
@@ -126,7 +131,7 @@ class RecoveryManager:
     
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger("recovery_manager")
+        self.logger = get_logger("system_components.recovery_manager")
         
     def handle_failure(self, subsystem_name, error):
         """Handle a subsystem failure."""
@@ -166,7 +171,7 @@ class SystemController:
         self.state_manager = StateManager(state_file="system_state.json")
         self.health_monitor = HealthMonitor(check_interval=30)  # 30 second checks
         self.recovery_manager = RecoveryManager(config=config)
-        self.logger = logging.getLogger("system_controller")
+        self.logger = get_logger("system_components.system_controller")
         
     def register_subsystem(self, name, subsystem):
         """Register a subsystem with the controller."""
@@ -254,7 +259,7 @@ class TimescaleDBManager:
         self.connection_string = connection_string
         self.engine = None
         self.connection_pool = None
-        self.logger = logging.getLogger("timescaledb_manager")
+        self.logger = get_logger("system_components.timescaledb_manager")
         self.performance_metrics = None
         
     def set_performance_metrics(self, metrics):
@@ -377,69 +382,144 @@ class TimescaleDBManager:
 
 # GPU Acceleration Configuration
 def configure_tensorflow_gpu():
-    """Configure TensorFlow for GPU acceleration."""
+    """Configure TensorFlow for GPU acceleration using NVIDIA TensorFlow containers."""
     try:
         import tensorflow as tf
+        gpu_logger = get_logger("system_components.gpu_config")
+        
+        # Check if running in NVIDIA container
+        is_nvidia_container = os.path.exists("/.dockerenv") and os.environ.get("NVIDIA_BUILD_ID")
+        if is_nvidia_container:
+            gpu_logger.info("Running in NVIDIA TensorFlow container")
         
         # Enable memory growth to prevent TensorFlow from allocating all GPU memory
         gpus = tf.config.list_physical_devices('GPU')
         if gpus:
             try:
+                # Configure memory growth for each GPU
                 for gpu in gpus:
                     tf.config.experimental.set_memory_growth(gpu, True)
-                logging.getLogger("gpu_config").info(f"Found {len(gpus)} GPU(s), memory growth enabled")
-            except RuntimeError as e:
-                logging.getLogger("gpu_config").error(f"Error configuring GPU memory growth: {e}")
+                gpu_logger.info(f"Found {len(gpus)} GPU(s), memory growth enabled")
                 
-        # Enable mixed precision training
+                # Set visible devices if specific GPUs should be used
+                # This is useful in multi-GPU environments
+                gpu_ids = os.environ.get("CUDA_VISIBLE_DEVICES")
+                if gpu_ids:
+                    gpu_logger.info(f"Using GPUs: {gpu_ids}")
+            except RuntimeError as e:
+                gpu_logger.error(f"Error configuring GPU memory growth: {e}")
+                
+        # Enable mixed precision training (optimized for NVIDIA Tensor Cores)
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
         tf.keras.mixed_precision.set_global_policy(policy)
-        logging.getLogger("gpu_config").info("Mixed precision training enabled")
+        gpu_logger.info("Mixed precision training enabled (optimized for Tensor Cores)")
         
-        # Enable XLA compilation
+        # Enable XLA compilation for better performance
         tf.config.optimizer.set_jit(True)
-        logging.getLogger("gpu_config").info("XLA compilation enabled")
+        gpu_logger.info("XLA compilation enabled")
         
-        # Apply CuDNN fixes for GH200
+        # Apply optimizations for NVIDIA GPUs
         os.environ["TF_USE_CUDNN"] = "1"
-        os.environ["TF_CUDNN_DETERMINISTIC"] = "0"
-        os.environ["TF_CUDNN_USE_AUTOTUNE"] = "1"
-        os.environ["TF_CUDNN_RESET_RNN_DESCRIPTOR"] = "1"
-        logging.getLogger("gpu_config").info("CuDNN fixes for GH200 applied")
+        os.environ["TF_CUDNN_DETERMINISTIC"] = "0"  # Disable for better performance
+        os.environ["TF_CUDNN_USE_AUTOTUNE"] = "1"   # Enable autotuning
+        os.environ["TF_CUDNN_RESET_RNN_DESCRIPTOR"] = "1"  # Better memory usage for RNNs
+        
+        # Additional optimizations for NVIDIA containers
+        os.environ["TF_GPU_THREAD_MODE"] = "gpu_private"  # Dedicate GPU threads
+        os.environ["TF_GPU_THREAD_COUNT"] = "2"  # Number of GPU threads
+        os.environ["TF_USE_CUDA_MALLOC_ASYNC"] = "1"  # Async memory allocation
+        os.environ["TF_ENABLE_ONEDNN_OPTS"] = "1"  # Enable oneDNN optimizations
+        
+        gpu_logger.info("NVIDIA GPU optimizations applied")
         
         # Log TensorFlow configuration
-        logging.getLogger("gpu_config").info(f"TensorFlow version: {tf.__version__}")
-        logging.getLogger("gpu_config").info(f"CUDA available: {tf.test.is_built_with_cuda()}")
-        logging.getLogger("gpu_config").info(f"GPU available: {tf.test.is_gpu_available() if hasattr(tf.test, 'is_gpu_available') else tf.config.list_physical_devices('GPU')}")
+        gpu_logger.info(f"TensorFlow version: {tf.__version__}")
+        gpu_logger.info(f"CUDA available: {tf.test.is_built_with_cuda()}")
+        gpu_logger.info(f"GPU available: {tf.test.is_gpu_available() if hasattr(tf.test, 'is_gpu_available') else tf.config.list_physical_devices('GPU')}")
+        
+        # Log GPU information
+        if gpus:
+            try:
+                # Get GPU device details
+                for i, gpu in enumerate(gpus):
+                    gpu_details = tf.config.experimental.get_device_details(gpu)
+                    gpu_logger.info(f"GPU {i}: {gpu_details}")
+            except Exception as e:
+                gpu_logger.debug(f"Could not get detailed GPU information: {e}")
         
         return gpus
     except ImportError:
-        logging.getLogger("gpu_config").warning("TensorFlow not installed, GPU acceleration not available")
+        logger.warning("TensorFlow not installed, GPU acceleration not available")
         return []
     except Exception as e:
-        logging.getLogger("gpu_config").error(f"Error configuring TensorFlow GPU: {e}")
+        logger.error(f"Error configuring TensorFlow GPU: {e}")
         return []
 
 def configure_xgboost_gpu():
-    """Configure XGBoost for GPU acceleration."""
+    """Configure XGBoost for GPU acceleration with NVIDIA containers."""
     try:
         import xgboost as xgb
+        gpu_logger = get_logger("system_components.gpu_config")
         
-        # Check if GPU is available
+        # Check if running in NVIDIA container
+        is_nvidia_container = os.path.exists("/.dockerenv") and os.environ.get("NVIDIA_BUILD_ID")
+        if is_nvidia_container:
+            gpu_logger.info("Running in NVIDIA container with XGBoost support")
+        
+        # Check CUDA availability
+        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if cuda_visible_devices:
+            gpu_logger.info(f"CUDA_VISIBLE_DEVICES: {cuda_visible_devices}")
+        
+        # Check if GPU is available for XGBoost
         try:
-            # This will raise an exception if GPU plugin is not installed
-            params = {'tree_method': 'gpu_hist'}
-            bst = xgb.train(params, xgb.DMatrix(np.random.rand(10, 10), 
-                                               label=np.random.rand(10)))
-            logging.getLogger("gpu_config").info("XGBoost GPU acceleration available")
+            # Create test parameters with optimal settings for NVIDIA GPUs
+            params = {
+                'tree_method': 'gpu_hist',           # Use GPU histogram for tree construction
+                'predictor': 'gpu_predictor',        # Use GPU for prediction
+                'gpu_id': 0,                         # Use first GPU
+                'max_bin': 256,                      # Optimal for GPU memory usage
+                'sampling_method': 'gradient_based', # Better performance on GPU
+                'n_jobs': -1                         # Use all available cores
+            }
+            
+            # Create small test dataset
+            test_data = xgb.DMatrix(np.random.rand(10, 10), label=np.random.rand(10))
+            
+            # Try training a small model
+            gpu_logger.info("Testing XGBoost GPU acceleration...")
+            # Train model and verify it works
+            xgb.train(params, test_data, num_boost_round=2)
+            
+            # Get GPU memory usage if possible
+            try:
+                import pynvml
+                pynvml.nvmlInit()
+                device_count = pynvml.nvmlDeviceGetCount()
+                for i in range(device_count):
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                    info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                    gpu_logger.info(f"GPU {i} Memory: {info.used/1024/1024:.2f}MB used / {info.total/1024/1024:.2f}MB total")
+            except Exception as e:
+                gpu_logger.debug(f"Could not get GPU memory information: {e}")
+                
+            gpu_logger.info("XGBoost GPU acceleration successfully configured")
             return True
+            
         except Exception as e:
-            logging.getLogger("gpu_config").warning(f"XGBoost GPU acceleration not available: {e}")
-            logging.getLogger("gpu_config").info("Falling back to CPU for XGBoost")
+            gpu_logger.warning(f"XGBoost GPU acceleration not available: {e}")
+            gpu_logger.info("Falling back to CPU for XGBoost with optimized settings")
+            
+            # Configure optimized CPU settings
+            os.environ["OMP_NUM_THREADS"] = str(os.cpu_count())
+            os.environ["OPENBLAS_NUM_THREADS"] = str(os.cpu_count())
+            os.environ["MKL_NUM_THREADS"] = str(os.cpu_count())
+            
             return False
+            
     except ImportError:
-        logging.getLogger("gpu_config").warning("XGBoost not installed, GPU acceleration not available")
+        logger.warning("XGBoost not installed, GPU acceleration not available")
         return False
     except Exception as e:
-        logging.getLogger("gpu_config").error(f"Error configuring XGBoost GPU: {e}")
+        logger.error(f"Error configuring XGBoost GPU: {e}")
         return False

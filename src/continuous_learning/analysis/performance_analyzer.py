@@ -1384,7 +1384,7 @@ class PerformanceAnalyzer:
             # Also save plot data
             plot_path = save_path.rsplit('.', 1)[0] + '_plot' if '.' in save_path else save_path + '_plot'
             self.plot_performance(equity_curve, trades, market_data, save_path=plot_path)
-            logger.info(f"Plot data saved alongside performance report")
+            logger.info("Plot data saved alongside performance report")
 
         return report
 

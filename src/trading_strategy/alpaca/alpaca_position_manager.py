@@ -9,18 +9,10 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from autonomous_trading_system.src.trading_strategy.alpaca.alpaca_integration import (
-    AlpacaIntegration,
-)
-from autonomous_trading_system.src.trading_strategy.risk.profit_target_manager import (
-    ProfitTargetManager,
-)
-from autonomous_trading_system.src.trading_strategy.risk.stop_loss_manager import (
-    StopLossManager,
-)
-from autonomous_trading_system.src.trading_strategy.signals.peak_detector import (
-    PeakDetector,
-)
+from src.trading_strategy.alpaca.alpaca_client import AlpacaClient
+from src.trading_strategy.risk.profit_target_manager import ProfitTargetManager
+from src.trading_strategy.risk.stop_loss_manager import StopLossManager
+from src.trading_strategy.signals.peak_detector import PeakDetector
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +34,8 @@ class AlpacaPositionManager:
 
     def __init__(
         self,
-        alpaca_integration: AlpacaIntegration = None,
-        alpaca_client = None,
+        alpaca_integration = None,
+        alpaca_client: AlpacaClient = None,
         stop_loss_manager: StopLossManager | None = None,
         profit_target_manager: ProfitTargetManager | None = None,
         peak_detector: PeakDetector | None = None,
@@ -601,7 +593,7 @@ class AlpacaPositionManager:
             return float(position.get("unrealized_pl", 0))
         return 0.0
 
-    def get_position_value(self) -> float:
+    def get_total_position_value(self) -> float:
         """
         Get total value of all positions.
 
@@ -637,7 +629,7 @@ class AlpacaPositionManager:
         account_value = float(account["equity"])
 
         # Calculate exposure
-        position_value = self.get_position_value()
+        position_value = self.get_total_position_value()
 
         return position_value / account_value if account_value > 0 else 0
         

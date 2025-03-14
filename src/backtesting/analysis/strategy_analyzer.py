@@ -9,8 +9,27 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import norm
+from pathlib import Path
 
+# Set up logging
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create logs directory if it doesn't exist
+log_dir = Path('/home/ubuntu/INAVVI_v11-1/src/logs')
+log_dir.mkdir(parents=True, exist_ok=True)
+
+# Create file handler
+log_file = log_dir / 'strategy_analyzer.log'
+file_handler = logging.FileHandler(log_file)
+file_handler.setLevel(logging.INFO)
+
+# Create formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+
+# Add handler to logger
+logger.addHandler(file_handler)
 
 class StrategyAnalyzer:
     """
@@ -27,7 +46,7 @@ class StrategyAnalyzer:
         self.initial_capital = initial_capital
         self.performance_metrics = {}
     
-    def calculate_returns(self, positions_df):
+    def calculate_returns(self, positions_df: pd.DataFrame) -> pd.DataFrame:
         """
         Calculate returns from positions.
         

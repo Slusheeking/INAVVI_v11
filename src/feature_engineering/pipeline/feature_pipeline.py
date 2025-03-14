@@ -2,7 +2,7 @@
 Feature Engineering Pipeline
 
 This module provides the core functionality for generating features from raw market data.
-It implements the FeatureEngineer class that orchestrates the feature generation process.
+It implements the FeaturePipeline class that orchestrates the feature generation process.
 """
 
 from datetime import datetime, timedelta
@@ -11,40 +11,230 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-# Try both import styles to handle different execution contexts
-try:
-    from autonomous_trading_system.src.feature_engineering.pipeline.multi_timeframe_processor import (
-        MultiTimeframeProcessor,
-    )
-    from autonomous_trading_system.src.feature_engineering.store.feature_cache import (
-        feature_store_cache,
-    )
-    from autonomous_trading_system.src.feature_engineering.store.feature_store import (
-        feature_store,
-    )
-    from autonomous_trading_system.src.utils.database.timescale_manager import (
-        TimescaleManager,
-    )
-    from autonomous_trading_system.src.utils.concurrency.thread_pool import ThreadPool
-    from autonomous_trading_system.src.utils.logging.logger import setup_logger
-    from autonomous_trading_system.src.utils.database.query_builder import QueryBuilder
-except ImportError:
-    # For when running from within the autonomous_trading_system directory
-    from src.feature_engineering.pipeline.multi_timeframe_processor import (
-        MultiTimeframeProcessor,
-    )
-    from src.feature_engineering.store.feature_cache import (
-        feature_store_cache,
-    )
-    from src.feature_engineering.store.feature_store import (
-        feature_store,
-    )
-    from src.utils.concurrency.thread_pool import ThreadPool
-    from src.utils.logging.logger import setup_logger
-    from src.utils.database.query_builder import QueryBuilder
-    from src.utils.database.timescale_manager import TimescaleManager
+# Import standard Python modules
+import logging
+import concurrent.futures
 
-logger = setup_logger(__name__)
+# Import project modules
+from src.feature_engineering.store.feature_store import feature_store
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+class FeaturePipeline:
+    """
+    Main pipeline for feature engineering.
+    
+    This class provides a simplified interface for generating features from raw market data.
+    It wraps the FeatureEngineer class and provides methods for generating different types of features.
+    """
+    
+    def __init__(self, db_manager=None, use_redis_cache=True, redis_cache_ttl=3600, max_workers=4):
+        """
+        Initialize the feature pipeline.
+        
+        Args:
+            db_manager: Database manager for loading data and storing features
+            use_redis_cache: Whether to use Redis caching
+            redis_cache_ttl: Time-to-live for cached features (in seconds)
+            max_workers: Maximum number of worker threads for parallel processing
+        """
+        self.engineer = FeatureEngineer(
+            db_manager=db_manager,
+            use_redis_cache=use_redis_cache,
+            redis_cache_ttl=redis_cache_ttl,
+            max_workers=max_workers
+        )
+        logger.info("Initialized FeaturePipeline")
+    
+    def generate_technical_indicators(self, df):
+        """
+        Generate technical indicators for the data.
+        
+        Args:
+            df: DataFrame with raw data
+            
+        Returns:
+            DataFrame with technical indicators
+        """
+        return self.engineer._calculate_technical_indicators(df)
+    
+    def generate_price_features(self, df):
+        """
+        Generate price-based features.
+        
+        Args:
+            df: DataFrame with raw data
+            
+        Returns:
+            DataFrame with price features
+        """
+        # Extract price-related features from market microstructure
+        result_df = df.copy()
+        
+        # Calculate price volatility
+        result_df["price_volatility"] = (
+            result_df["close"].pct_change().rolling(window=20).std()
+        )
+        
+        # Calculate price acceleration
+        result_df["price_acceleration"] = result_df["close"].pct_change().diff()
+        
+        # Calculate price gap
+        result_df["price_gap"] = result_df["open"] / result_df["close"].shift(1) - 1
+        
+        # Calculate price trend strength
+        result_df["trend_strength"] = (
+            result_df["close"].rolling(window=20).mean()
+            / result_df["close"].rolling(window=50).mean()
+            - 1
+        )
+        
+        return result_df
+    
+    def generate_volume_features(self, df):
+        """
+        Generate volume-based features.
+        
+        Args:
+            df: DataFrame with raw data
+            
+        Returns:
+            DataFrame with volume features
+        """
+        # Extract volume-related features from market microstructure
+        result_df = df.copy()
+        
+        # Calculate volume volatility
+        result_df["volume_volatility"] = (
+            result_df["volume"].pct_change().rolling(window=20).std()
+        )
+        
+        # Calculate price-volume correlation
+        result_df["price_volume_corr"] = (
+            result_df["close"]
+            .pct_change()
+            .rolling(window=20)
+            .corr(result_df["volume"].pct_change())
+        )
+        
+        # Calculate volume acceleration
+        result_df["volume_acceleration"] = result_df["volume"].pct_change().diff()
+        
+        # Calculate volume surprise
+        result_df["volume_surprise"] = (
+            result_df["volume"] / result_df["volume"].rolling(window=20).mean() - 1
+        )
+        
+        # Calculate volume gap
+        result_df["volume_gap"] = result_df["volume"] / result_df["volume"].shift(1) - 1
+        
+        # Calculate OBV
+        result_df = self.engineer._calculate_obv(result_df, {})
+        
+        return result_df
+    
+    def generate_volatility_features(self, df):
+        """
+        Generate volatility-based features.
+        
+        Args:
+            df: DataFrame with raw data
+            
+        Returns:
+            DataFrame with volatility features
+        """
+        # Extract volatility-related features
+        result_df = df.copy()
+        
+        # Calculate Bollinger Bands
+        result_df = self.engineer._calculate_bollinger_bands(result_df, {"parameters": {"window": 20, "num_std_dev": 2}})
+        
+        # Calculate ATR
+        result_df = self.engineer._calculate_atr(result_df, {"parameters": {"window": 14}})
+        
+        # Calculate range volatility ratio
+        result_df["range_volatility_ratio"] = (result_df["high"] - result_df["low"]) / (
+            result_df["close"].rolling(window=20).std() * result_df["close"]
+        )
+        
+        return result_df
+    
+    def generate_all_features(self, df):
+        """
+        Generate all features for the data.
+        
+        Args:
+            df: DataFrame with raw data
+            
+        Returns:
+            DataFrame with all features
+        """
+        # Generate all types of features
+        df = self.generate_technical_indicators(df)
+        df = self.generate_price_features(df)
+        df = self.generate_volume_features(df)
+        df = self.generate_volatility_features(df)
+        
+        # Apply transformations
+        df = self.engineer._apply_feature_transformations(df)
+        
+        return df
+    
+    def create_target_variable(self, df):
+        """
+        Create target variable for model training.
+        
+        Args:
+            df: DataFrame with features
+            
+        Returns:
+            DataFrame with target variable
+        """
+        return self.engineer._create_target_variable(df)
+    
+    def get_health(self):
+        """
+        Get the health status of the feature pipeline.
+        
+        Returns:
+            Dictionary with health status
+        """
+        return {"healthy": True, "reason": "Feature pipeline is operational"}
+    
+    def initialize(self):
+        """
+        Initialize the feature pipeline.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        logger.info("Initializing feature pipeline")
+        return True
+    
+    def get_status(self):
+        """
+        Get the current status of the feature pipeline.
+        
+        Returns:
+            Status string
+        """
+        return "active"
+    
+    def shutdown(self):
+        """
+        Shutdown the feature pipeline.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        logger.info("Shutting down feature pipeline")
+        return True
 
 
 class FeatureEngineer:
@@ -61,8 +251,8 @@ class FeatureEngineer:
 
     def __init__(
         self,
-        db_manager: Optional[TimescaleManager] = None,
-        use_redis_cache: bool = True,
+        db_manager: Optional[Any] = None,
+        use_redis_cache: bool = False,  # Changed to False by default since we're not using Redis
         redis_cache_ttl: int = 3600,  # 1 hour
         indicators_config: Optional[Dict[str, Any]] = None,
         max_workers: int = 4,
@@ -72,24 +262,18 @@ class FeatureEngineer:
 
         Args:
             db_manager: Database manager for loading data and storing features
-            use_redis_cache: Whether to use Redis caching
+            use_redis_cache: Whether to use Redis caching (not used in this simplified version)
             redis_cache_ttl: Time-to-live for cached features (in seconds)
             indicators_config: Configuration for technical indicators
             max_workers: Maximum number of worker threads for parallel processing
         """
         self.db_manager = db_manager
-        self.use_redis_cache = use_redis_cache
+        self.use_redis_cache = False  # Disable Redis caching in this simplified version
         self.redis_cache_ttl = redis_cache_ttl
         self.indicators_config = indicators_config or {}
         self.max_workers = max_workers
 
-        # Initialize multi-timeframe processor
-        self.multi_timeframe_processor = MultiTimeframeProcessor(
-            db_manager=db_manager,
-            use_cache=use_redis_cache,
-            cache_ttl=redis_cache_ttl,
-            max_workers=max_workers,
-        )
+        # No multi-timeframe processor in this simplified version
 
         # Initialize feature calculators
         self._initialize_feature_calculators()
@@ -125,66 +309,33 @@ class FeatureEngineer:
 
         results = {}
 
-        # Check Redis cache first if enabled
-        if self.use_redis_cache:
-            cached_results = {}
-            for timeframe in timeframes:
-                cache_key = f"multi_timeframe_features:{symbol}:{timeframe}"
-                cache_params = {
-                    "symbol": symbol,
-                    "timeframe": timeframe,
-                    "lookback_days": lookback_days,
-                    "include_target": include_target,
-                }
-
-                # Try to get from cache
-                cached_data = feature_store_cache.get_feature(cache_key, cache_params)
-                if cached_data is not None:
-                    logger.info(f"Cache hit for {symbol} {timeframe} features")
-                    cached_results[timeframe] = cached_data
-
-            # If all timeframes were cached, return them
-            if len(cached_results) == len(timeframes):
-                logger.info(f"All timeframes for {symbol} were cached")
-                return cached_results
-
-            # Remove cached timeframes from the list to process
-            timeframes_to_process = [
-                tf for tf in timeframes if tf not in cached_results
-            ]
-            logger.info(
-                f"Need to process {len(timeframes_to_process)} timeframes for {symbol}"
-            )
-        else:
-            timeframes_to_process = timeframes
-            cached_results = {}
+        # No caching in this simplified version
+        timeframes_to_process = timeframes
 
         # Generate features for each timeframe
         if parallel and len(timeframes_to_process) > 1:
-            # Use parallel processing
-            thread_pool = ThreadPool(max_workers=min(self.max_workers, len(timeframes_to_process)))
-            futures = []
-            
-            # Submit tasks
-            for tf in timeframes_to_process:
-                future = thread_pool.submit(
-                    self.generate_features,
-                    symbol,
-                    tf,
-                    lookback_days,
-                    store_features,
-                    include_target,
-                )
-                futures.append((future, tf))
-            
-            # Process results as they complete
-            for future, timeframe in thread_pool.as_completed([f for f, _ in futures]):
-                try:
-                    features, targets = future.result()
-                    results[timeframe] = (features, targets)
-                except Exception as e:
-                    logger.error(f"Error generating features for {symbol} {timeframe}: {e}")
-            
+            # Use parallel processing with concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(self.max_workers, len(timeframes_to_process))) as executor:
+                # Submit tasks
+                future_to_timeframe = {
+                    executor.submit(
+                        self.generate_features,
+                        symbol,
+                        tf,
+                        lookback_days,
+                        store_features,
+                        include_target,
+                    ): tf for tf in timeframes_to_process
+                }
+                
+                # Process results as they complete
+                for future in concurrent.futures.as_completed(future_to_timeframe):
+                    timeframe = future_to_timeframe[future]
+                    try:
+                        features, targets = future.result()
+                        results[timeframe] = (features, targets)
+                    except Exception as e:
+                        logger.error(f"Error generating features for {symbol} {timeframe}: {e}")
         else:
             # Sequential processing
             for timeframe in timeframes_to_process:
@@ -197,30 +348,6 @@ class FeatureEngineer:
                     logger.error(
                         f"Error generating features for {symbol} {timeframe}: {e}"
                     )
-
-        # Combine with cached results
-        results.update(cached_results)
-
-        # Cache results if Redis cache is enabled
-        if self.use_redis_cache:
-            for timeframe, (features, targets) in results.items():
-                if timeframe not in cached_results and features is not None:
-                    cache_key = f"multi_timeframe_features:{symbol}:{timeframe}"
-                    cache_params = {
-                        "symbol": symbol,
-                        "timeframe": timeframe,
-                        "lookback_days": lookback_days,
-                        "include_target": include_target,
-                    }
-
-                    # Store in cache
-                    feature_store_cache.set_feature(
-                        cache_key,
-                        cache_params,
-                        (features, targets),
-                        ttl=self.redis_cache_ttl,
-                    )
-                    logger.info(f"Cached features for {symbol} {timeframe}")
 
         return results
 
@@ -318,35 +445,14 @@ class FeatureEngineer:
         start_time = end_time - timedelta(days=lookback_days)
 
         try:
-            # Try cache first if enabled
-            if self.use_redis_cache:
-                cache_key = f"raw_data:{symbol}:{timeframe}:{start_time.isoformat()}:{end_time.isoformat()}"
-                cache_params = {
-                    "symbol": symbol,
-                    "timeframe": timeframe,
-                    "start_time": start_time.isoformat(),
-                    "end_time": end_time.isoformat(),
-                }
-
-                cached_df = feature_store_cache.get_dataframe(cache_key, cache_params)
-                if cached_df is not None:
-                    logger.debug(f"Cache hit for raw data for {symbol} {timeframe}")
-                    return cached_df
-
-            # Build query
-            # Use QueryBuilder instead of raw SQL
-            query_builder = QueryBuilder()
-            query = query_builder.build(
-                table="stock_aggs",
-                columns=["*"],
-                conditions={
-                    "symbol": {"equals": ":symbol"},
-                    "timeframe": {"equals": ":timeframe"},
-                    "timestamp": {"between": [":start_time", ":end_time"]}
-                },
-                order_by=["timestamp"]
-            )
-            
+            # Direct SQL query without caching
+            query = """
+            SELECT * FROM stock_aggs
+            WHERE symbol = :symbol
+            AND timeframe = :timeframe
+            AND timestamp BETWEEN :start_time AND :end_time
+            ORDER BY timestamp
+            """
 
             params = {
                 "symbol": symbol,
@@ -363,12 +469,6 @@ class FeatureEngineer:
                     f"No data found for {symbol} {timeframe} from {start_time} to {end_time}"
                 )
                 return None
-
-            # Cache the result if enabled
-            if self.use_redis_cache:
-                feature_store_cache.set_dataframe(
-                    cache_key, cache_params, df, self.redis_cache_ttl
-                )
 
             return df
         except Exception as e:

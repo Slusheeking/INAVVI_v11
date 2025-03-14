@@ -74,7 +74,7 @@ class ProfitTargetManager:
             f"r_multiple_targets={r_multiple_targets}"
         )
 
-    def calculate_profit_target(
+    def calculate_simple_profit_target(
         self,
         ticker: str,
         entry_price: float,

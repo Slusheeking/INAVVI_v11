@@ -6,10 +6,9 @@ This module provides functionality for validating model performance.
 
 import logging
 import numpy as np
-import pandas as pd
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix
 
 logger = logging.getLogger(__name__)
 

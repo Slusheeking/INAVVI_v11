@@ -18,13 +18,79 @@ from datetime import datetime
 from typing import Any
 import pandas as pd
 
-# Import required modules
-from src.utils.port_manager import allocate_port, release_port
-from src.utils.serialization.pickle_serializer import PickleSerializer
-from src.utils.logging.logger import setup_logger
-from src.model_training.registry.model_metadata import (
-    ModelMetadata,
-)
+# Import required modules - using built-in modules instead of custom ones
+import pickle
+
+# Define dummy functions for port management
+def allocate_port(service_name):
+    """Dummy function to allocate a port."""
+    return 8000
+
+def release_port(port):
+    """Dummy function to release a port."""
+    pass
+
+# Define a simple pickle serializer
+class PickleSerializer:
+    """Simple pickle serializer."""
+    def serialize_to_file(self, obj, file_path):
+        """Serialize object to file."""
+        with open(file_path, 'wb') as f:
+            pickle.dump(obj, f)
+    
+    def deserialize_from_file(self, file_path):
+        """Deserialize object from file."""
+        with open(file_path, 'rb') as f:
+            return pickle.load(f)
+
+# Define a simple logger setup function
+def setup_logger(name):
+    """Simple logger setup function."""
+    return logging.getLogger(name)
+
+# Define a simple model metadata class
+class ModelMetadata:
+    """Simple model metadata class."""
+    def __init__(self, model_id=None, model_type=None, model_version=None, description=None):
+        """Initialize model metadata."""
+        self.model_id = model_id or f"model_{uuid.uuid4().hex[:8]}"
+        self.model_type = model_type or "unknown"
+        self.model_version = model_version or "1.0.0"
+        self.metadata = {
+            "model_id": self.model_id,
+            "model_type": self.model_type,
+            "model_version": self.model_version,
+            "description": description or "",
+            "created_at": datetime.now().isoformat(),
+        }
+    
+    def set_parameters(self, parameters):
+        """Set model parameters."""
+        self.metadata["parameters"] = parameters
+    
+    def set_performance(self, performance):
+        """Set model performance metrics."""
+        self.metadata["performance"] = performance
+    
+    def get_metadata(self):
+        """Get model metadata."""
+        return self.metadata
+    
+    def save(self, directory):
+        """Save metadata to file."""
+        os.makedirs(directory, exist_ok=True)
+        metadata_path = os.path.join(directory, f"{self.model_id}_metadata.json")
+        with open(metadata_path, "w") as f:
+            json.dump(self.metadata, f, indent=2)
+        return metadata_path
+    
+    def load(self, metadata_path):
+        """Load metadata from file."""
+        with open(metadata_path) as f:
+            self.metadata = json.load(f)
+        self.model_id = self.metadata.get("model_id", self.model_id)
+        self.model_type = self.metadata.get("model_type", self.model_type)
+        self.model_version = self.metadata.get("model_version", self.model_version)
 
 # Configure logging
 logging.basicConfig(

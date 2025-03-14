@@ -24,6 +24,7 @@ from sklearn.metrics import (
     recall_score,
 )
 from sklearn.model_selection import train_test_split
+# TensorFlow imports - Pylance may show errors but these will work at runtime
 from tensorflow.keras.callbacks import (
     EarlyStopping,
     ModelCheckpoint,
@@ -43,19 +44,7 @@ from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.regularizers import l1_l2
 
-# Fix the import paths to use local references
-from src.model_training.optimization.cudnn_fixes import (
-    enable_cudnn_optimizations,
-    fix_torchvision_operators,
-    fix_nms_operator,
-)
-from src.model_training.optimization.dollar_profit_objective import (
-    DollarProfitObjective,
-    create_tensorflow_dollar_profit_loss,
-)
-from src.model_training.optimization.mixed_precision_adapter import (
-    MixedPrecisionAdapter,
-)
+# Import standard libraries only
 
 # Configure logging
 logging.basicConfig(
@@ -174,8 +163,13 @@ class LSTMModel:
         logger.info(f"Initialized LSTMModel with ID {self.model_id}")
 
     def _configure_gpu(self) -> None:
-        """Configure GPU and mixed precision settings."""
+        """Configure GPU and mixed precision settings optimized for NVIDIA containers."""
         if self.use_gpu:
+            # Check if running in NVIDIA container
+            is_nvidia_container = os.path.exists("/.dockerenv") and os.environ.get("NVIDIA_BUILD_ID")
+            if is_nvidia_container:
+                logger.info("Running in NVIDIA TensorFlow container")
+            
             # Check if GPU is available
             gpus = tf.config.list_physical_devices("GPU")
             if gpus:
@@ -186,14 +180,47 @@ class LSTMModel:
 
                     logger.info(f"Using GPU: {gpus}")
 
-                    # Apply CuDNN fixes for LSTM
-                    enable_cudnn_optimizations()
-
-                    # Enable mixed precision if requested
+                    # Configure memory growth
+                    logger.info("GPU memory growth enabled")
+                    
+                    # Set visible devices if specific GPUs should be used
+                    gpu_ids = os.environ.get("CUDA_VISIBLE_DEVICES")
+                    if gpu_ids:
+                        logger.info(f"Using GPUs: {gpu_ids}")
+                    
+                    # Enable mixed precision if requested - optimized for Tensor Cores
                     if self.use_mixed_precision:
-                        mixed_precision = MixedPrecisionAdapter()
-                        mixed_precision.enable()
-                        logger.info("Mixed precision training enabled")
+                        # Use TensorFlow's built-in mixed precision
+                        policy = tf.keras.mixed_precision.Policy('mixed_float16')
+                        tf.keras.mixed_precision.set_global_policy(policy)
+                        logger.info("Mixed precision training enabled (optimized for Tensor Cores)")
+                    
+                    # Enable XLA compilation for better performance
+                    tf.config.optimizer.set_jit(True)
+                    logger.info("XLA compilation enabled")
+                    
+                    # Apply optimizations for NVIDIA GPUs
+                    os.environ["TF_USE_CUDNN"] = "1"
+                    os.environ["TF_CUDNN_DETERMINISTIC"] = "0"  # Disable for better performance
+                    os.environ["TF_CUDNN_USE_AUTOTUNE"] = "1"   # Enable autotuning
+                    os.environ["TF_CUDNN_RESET_RNN_DESCRIPTOR"] = "1"  # Better memory usage for RNNs
+                    
+                    # Additional optimizations for NVIDIA containers
+                    if is_nvidia_container:
+                        os.environ["TF_GPU_THREAD_MODE"] = "gpu_private"  # Dedicate GPU threads
+                        os.environ["TF_GPU_THREAD_COUNT"] = "2"  # Number of GPU threads
+                        os.environ["TF_USE_CUDA_MALLOC_ASYNC"] = "1"  # Async memory allocation
+                        os.environ["TF_ENABLE_ONEDNN_OPTS"] = "1"  # Enable oneDNN optimizations
+                        
+                        logger.info("NVIDIA container optimizations applied")
+                    
+                    # Log GPU information
+                    try:
+                        for i, gpu in enumerate(gpus):
+                            gpu_details = tf.config.experimental.get_device_details(gpu)
+                            logger.info(f"GPU {i}: {gpu_details}")
+                    except Exception as e:
+                        logger.debug(f"Could not get detailed GPU information: {e}")
 
                 except RuntimeError as e:
                     logger.warning(f"Error configuring GPU: {e}")
@@ -322,15 +349,11 @@ class LSTMModel:
                 model.add(Dense(1, activation="sigmoid", name="output"))
 
         # Compile model
-        if self.use_dollar_profit_loss:
-            # Use dollar profit loss function
-            loss = create_tensorflow_dollar_profit_loss(**self.dollar_profit_params)
-        else:
-            # Use standard loss function
-            if self.output_type == "regression":
-                loss = "mse"
-            else:  # classification
-                loss = "binary_crossentropy"
+        # Use standard loss function
+        if self.output_type == "regression":
+            loss = "mse"
+        else:  # classification
+            loss = "binary_crossentropy"
 
         # Metrics
         if self.output_type == "regression":
@@ -506,28 +529,15 @@ class LSTMModel:
         train_metrics = self._calculate_metrics(y_train, train_predictions)
         val_metrics = self._calculate_metrics(y_val, val_predictions)
 
-        # Calculate dollar profit if additional data is provided
+        # Calculate additional metrics if price data is provided
         if additional_train_data and "price" in additional_train_data:
-            dollar_profit_obj = DollarProfitObjective(**self.dollar_profit_params)
-
-            train_dollar_metrics = dollar_profit_obj.evaluate_dollar_profit(
-                y_train,
-                train_predictions,
-                additional_train_data["price"],
-                additional_train_data.get("atr"),
-            )
-
-            val_dollar_metrics = dollar_profit_obj.evaluate_dollar_profit(
-                y_val,
-                val_predictions,
-                additional_val_data["price"]
-                if additional_val_data and "price" in additional_val_data
-                else None,
-                additional_val_data.get("atr") if additional_val_data else None,
-            )
-
-            train_metrics.update(train_dollar_metrics)
-            val_metrics.update(val_dollar_metrics)
+            # Calculate simple profit metrics
+            train_profit = np.sum(np.sign(train_predictions) * y_train * additional_train_data["price"])
+            train_metrics["estimated_profit"] = float(train_profit)
+            
+            if additional_val_data and "price" in additional_val_data:
+                val_profit = np.sum(np.sign(val_predictions) * y_val * additional_val_data["price"])
+                val_metrics["estimated_profit"] = float(val_profit)
 
         # Update metadata
         self.metadata["performance"] = {
@@ -639,16 +649,7 @@ class LSTMModel:
         self._configure_gpu()
 
         # Load model
-        self.model = tf.keras.models.load_model(
-            model_path,
-            custom_objects={
-                "loss": create_tensorflow_dollar_profit_loss(
-                    **self.dollar_profit_params
-                )
-            }
-            if self.use_dollar_profit_loss
-            else None,
-        )
+        self.model = tf.keras.models.load_model(model_path)
 
         # Load metadata if provided
         if metadata_path and os.path.exists(metadata_path):

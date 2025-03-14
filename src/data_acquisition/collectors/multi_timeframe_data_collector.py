@@ -9,8 +9,8 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
-from autonomous_trading_system.src.data_acquisition.api.polygon_client import PolygonClient
-from autonomous_trading_system.src.data_acquisition.api.unusual_whales_client import UnusualWhalesClient
+from src.data_acquisition.api.polygon_client import PolygonClient
+from src.data_acquisition.api.unusual_whales_client import UnusualWhalesClient
 
 # Import pandas and numpy directly
 import pandas as pd

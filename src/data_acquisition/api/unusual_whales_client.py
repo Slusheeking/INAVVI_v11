@@ -15,7 +15,7 @@ from typing import Any
 import pandas as pd
 import requests
 from requests.exceptions import ConnectionError, RequestException, Timeout
-from autonomous_trading_system.src.utils.api import (
+from src.utils.api import (
     RateLimiter,
     RetryHandler,
 )
@@ -28,19 +28,31 @@ class UnusualWhalesClient:
     """Client for interacting with the Unusual Whales API."""
     
     def __init__(
-        self, 
+        self,
         api_key: str | None = None,
         base_url: str | None = None,
         rate_limit: int = 2,
         retry_attempts: int = 3,
         timeout: int = 30,
         verify_ssl: bool = True,
+        max_position_value: float = 2500.0,  # Maximum $2500 per stock
+        max_daily_value: float = 5000.0,     # Maximum $5000 per day
     ):
         """
-        Initialize the Unusual Whales API client.
+        Initialize the Unusual Whales API client with dollar-based position limits.
+        
+        Args:
+            api_key: Unusual Whales API key
+            base_url: Base URL for API requests
+            rate_limit: Rate limit in requests per second
+            retry_attempts: Number of retry attempts for failed requests
+            timeout: Request timeout in seconds
+            verify_ssl: Whether to verify SSL certificates
+            max_position_value: Maximum position value per stock in dollars
+            max_daily_value: Maximum total position value per day in dollars
         """
         # Try to get API key from environment if not provided
-        self.api_key = api_key 
+        self.api_key = api_key
         if not self.api_key:
             self.api_key = os.environ.get("UNUSUAL_WHALES_API_KEY")
             logger.debug(f"Using API key from environment: {self.api_key[:5]}..." if self.api_key and len(self.api_key) > 5 else "No API key found in environment")
@@ -50,6 +62,14 @@ class UnusualWhalesClient:
 
         # Set base URL
         self.BASE_URL = base_url or "https://api.unusualwhales.com"
+        
+        # Position tracking for dollar-based limits
+        self.max_position_value = max_position_value  # Maximum position value per stock
+        self.max_daily_value = max_daily_value        # Maximum total position value per day
+        self.current_daily_value = 0.0                # Current total position value for the day
+        self.position_values = {}                     # Current position value per ticker
+        self.position_count = 0                       # Number of positions taken today
+        self.last_reset_date = datetime.now().date()  # Last date when limits were reset
         
         self.session = requests.Session()
         self.session.headers.update({
@@ -145,15 +165,16 @@ class UnusualWhalesClient:
     @RateLimiter.decorator
     @RetryHandler.decorator
     def _make_request(
-        self, 
-        endpoint: str, 
-        params: dict[str, Any] | None = None, 
-        method: str = "GET", 
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        method: str = "GET",
         v2_base_url: str | None = None,
-        timeout: int | None = None
+        timeout: int | None = None,
+        high_priority: bool = False
     ) -> dict[str, Any]:
         """
-        Make a request to the Unusual Whales API with rate limit handling and retries.
+        Make a request to the Unusual Whales API with optimizations for high-frequency trading.
 
         Args:
             endpoint: API endpoint (without base URL)
@@ -161,6 +182,7 @@ class UnusualWhalesClient:
             method: HTTP method (GET or POST)
             v2_base_url: Optional base URL override for v2 API
             timeout: Request timeout in seconds (defaults to self.timeout)
+            high_priority: Whether this request is high priority (for real-time trading signals)
 
         Returns:
             API response as a dictionary
@@ -171,40 +193,78 @@ class UnusualWhalesClient:
         # Use provided base URL or default
         base_url = v2_base_url or self.BASE_URL
         url = f"{base_url}{endpoint}"
-        request_timeout = timeout or self.timeout
+        
+        # Adjust timeout for high-priority requests
+        if high_priority:
+            request_timeout = (timeout or self.timeout) // 2  # Shorter timeout for critical requests
+        else:
+            request_timeout = timeout or self.timeout
+            
         params = params or {}
         
-        # Log the request for debugging purposes
-        logger.debug(f"Making request to {method} {url} with params: {params}")
-        # Rate limiting is handled by decorator, no need to call _ensure_rate_limit directly
+        # Only log detailed debug info for non-high-priority requests to reduce overhead
+        if not high_priority:
+            logger.debug(f"Making request to {method} {url} with params: {params}")
         
-        # Make the request
-        if method.upper() == "GET":
-            response = self.session.get(url, params=params, timeout=request_timeout)
-        elif method.upper() == "POST":
-            response = self.session.post(url, json=params, headers=self.session.headers, timeout=request_timeout)
-        else:
-            raise ValueError(f"Unsupported HTTP method: {method}, must be GET or POST")
-        
-        self._handle_rate_limit(response)
-        
-        # Handle HTTP errors
-        response.raise_for_status()
-        
-        # Parse JSON response
-        data = response.json()
-        
-        # Check for API-level errors
-        if data.get("status") == "error" or data.get("error"):
-            error_msg = data.get("message", "Unknown API error")
-            if "error_code" in data:
-                error_msg = f"{data.get('error_code')}: {data.get('error_message', 'Unknown error')}"
-            raise ValueError(f"Unusual Whales API error: {error_msg}")
-        
-        # Log success response for debugging
-        logger.debug(f"Successful response from {url}: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
-        
-        return data
+        # Make the request with connection pooling and keep-alive
+        try:
+            if method.upper() == "GET":
+                # Use stream=False for better performance with small responses
+                response = self.session.get(
+                    url,
+                    params=params,
+                    timeout=request_timeout,
+                    stream=False,
+                    headers={
+                        **self.session.headers,
+                        "Connection": "keep-alive"  # Ensure connection reuse
+                    }
+                )
+            elif method.upper() == "POST":
+                response = self.session.post(
+                    url,
+                    json=params,
+                    timeout=request_timeout,
+                    headers={
+                        **self.session.headers,
+                        "Connection": "keep-alive"  # Ensure connection reuse
+                    }
+                )
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}, must be GET or POST")
+            
+            self._handle_rate_limit(response)
+            
+            # Handle HTTP errors
+            response.raise_for_status()
+            
+            # Parse JSON response efficiently
+            data = response.json()
+            
+            # Check for API-level errors
+            if data.get("status") == "error" or data.get("error"):
+                error_msg = data.get("message", "Unknown API error")
+                if "error_code" in data:
+                    error_msg = f"{data.get('error_code')}: {data.get('error_message', 'Unknown error')}"
+                raise ValueError(f"Unusual Whales API error: {error_msg}")
+            
+            # Only log detailed success info for non-high-priority requests
+            if not high_priority and logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"Successful response from {url}: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
+            
+            return data
+            
+        except (ConnectionError, Timeout) as e:
+            # For connection errors, try to reset the session
+            logger.warning(f"Connection error in request to {url}: {e}. Resetting session.")
+            self.session.close()
+            self.session = requests.Session()
+            self.session.headers.update({
+                "Authorization": f"Bearer {self.api_key}",
+                "Accept": "application/json, text/plain",
+                "User-Agent": "AutonomousTradingSystem/0.1"
+            })
+            raise  # Re-raise for retry handler
 
     def _validate_date_param(self, date_param: str | datetime | date | None) -> str | None:
         """
@@ -223,18 +283,25 @@ class UnusualWhalesClient:
 
     def get_options_flow(
         self,
-        limit: int = 100, 
+        limit: int = 100,
         page: int = 0,
         from_date: str | datetime | None = None,
         to_date: str | datetime | None = None,
         ticker: str | None = None,
-        symbol: str | None = None,         # Alternative parameter name for ticker  
+        symbol: str | None = None,         # Alternative parameter name for ticker
         issue_type: str | None = None,     # 'call' or 'put'
         alert_rule: str | None = None,     # Alert rule (unusual_volume, large_block, etc.)
+        high_priority: bool = False,       # Whether this is a high-priority request for real-time trading
+        min_premium: float | None = None,  # Minimum premium value
+        max_premium: float | None = None,  # Maximum premium value
+        min_size: int | None = None,       # Minimum contract size
+        max_size: int | None = None,       # Maximum contract size
+        sentiment: str | None = None,      # Filter by sentiment (bullish, bearish, neutral)
+        cache_results: bool = True,        # Whether to cache results for repeated queries
         **additional_params
     ) -> list[dict[str, Any]]:
         """
-        Get options flow data.
+        Get options flow data optimized for high-frequency trading with enhanced filtering.
 
         Args:
             limit: Number of results to return (default: 100, max: 200)
@@ -245,13 +312,53 @@ class UnusualWhalesClient:
             symbol: Alternative parameter name for ticker
             issue_type: Filter by contract type ('call' or 'put')
             alert_rule: Filter by alert rule ('unusual_volume', 'large_block', 'sweep', etc.)
+            high_priority: Whether this is a high-priority request for real-time trading
+            min_premium: Minimum premium value for filtering results
+            max_premium: Maximum premium value for filtering results
+            min_size: Minimum contract size for filtering results
+            max_size: Maximum contract size for filtering results
+            sentiment: Filter by sentiment (bullish, bearish, neutral)
+            cache_results: Whether to cache results for repeated queries
             **additional_params: Additional parameters to pass to the API
 
         Returns:
             list[dict[str, Any]]: List of options flow data
             List of options flow data
         """
-        params = {"limit": min(limit, 200), "page": page}
+        # Static cache for repeated queries (class-level cache)
+        if not hasattr(self.__class__, '_options_flow_cache'):
+            self.__class__._options_flow_cache = {}
+            self.__class__._cache_timestamps = {}
+        
+        # Generate cache key based on request parameters
+        cache_key = None
+        if cache_results:
+            cache_params = {
+                'ticker': ticker or symbol,
+                'issue_type': issue_type,
+                'high_priority': high_priority,
+                'limit': limit,
+                'page': page
+            }
+            cache_key = str(hash(frozenset(cache_params.items())))
+            
+            # Check if we have a cached result that's less than 5 seconds old for high-priority
+            # or 30 seconds for non-high-priority
+            cache_ttl = 5 if high_priority else 30  # seconds
+            if (cache_key in self.__class__._options_flow_cache and
+                cache_key in self.__class__._cache_timestamps and
+                time.time() - self.__class__._cache_timestamps[cache_key] < cache_ttl):
+                logger.debug(f"Using cached options flow data for {ticker or symbol}")
+                return self.__class__._options_flow_cache[cache_key]
+        
+        # For high-frequency trading, we need to optimize the request
+        # Increase limit for high-priority requests to reduce number of API calls
+        if high_priority:
+            actual_limit = min(200, limit)  # Maximum allowed by API
+        else:
+            actual_limit = min(limit, 200)
+            
+        params = {"limit": actual_limit, "page": page}
         
         # The new API uses ticker_symbols parameter, comma-separated
         if symbol is not None:
@@ -259,39 +366,89 @@ class UnusualWhalesClient:
         elif ticker is not None:
             params["ticker_symbols"] = ticker
         
-        # Set parameters to ensure we get data
-        # intraday_only should be a string "true" or "false", not a boolean
-        params["intraday_only"] = "false"  # Get all alerts, not just intraday
-        
-        # Include a wide range of notification types to ensure we get data
-        params["noti_types[]"] = [
-            "option_contract",
-            "option_contract_interval",
-            "flow_alerts",
-            "chain_oi_change",
-            "dividends",
-            "earnings",
-            "insider_trades",
-            "trading_state",
-            "analyst_rating",
-            "price_target"
-        ]
+        # For high-frequency trading, focus on intraday data when in high priority mode
+        if high_priority:
+            params["intraday_only"] = "true"  # Focus on intraday data for real-time trading
+            
+            # For high-priority requests, focus only on the most relevant notification types
+            params["noti_types[]"] = [
+                "option_contract",
+                "flow_alerts"
+            ]
+        else:
+            # For non-high-priority requests, get more comprehensive data
+            params["intraday_only"] = "false"
+            
+            # Include a wide range of notification types
+            params["noti_types[]"] = [
+                "option_contract",
+                "option_contract_interval",
+                "flow_alerts",
+                "chain_oi_change",
+                "dividends",
+                "earnings",
+                "insider_trades",
+                "trading_state",
+                "analyst_rating",
+                "price_target"
+            ]
 
         # Add issue_type if provided
         if issue_type:
             params["issue_type"] = issue_type
+            
+        # Add premium filters if provided
+        if min_premium is not None:
+            params["min_premium"] = min_premium
+        if max_premium is not None:
+            params["max_premium"] = max_premium
+            
+        # Add size filters if provided
+        if min_size is not None:
+            params["min_size"] = min_size
+        if max_size is not None:
+            params["max_size"] = max_size
+            
+        # Add sentiment filter if provided
+        if sentiment:
+            params["sentiment"] = sentiment
+            
         # Add any custom parameters
         if additional_params:
             params.update(additional_params)
+        
+        # For high-frequency trading, go directly to the most efficient endpoint
+        if high_priority and (symbol or ticker):
+            # Use the most direct endpoint for real-time trading
+            options_params = {
+                "limit": actual_limit,
+                "page": page,
+                "symbol": symbol or ticker,
+                "intraday_only": "true"
+            }
             
-        # First try the alerts endpoint which we know works
+            if issue_type:
+                options_params["issue_type"] = issue_type
+                
+            if alert_rule:
+                options_params["alert_rule"] = alert_rule
+                
+            # Make high-priority request
+            options_result = self._make_request(
+                "/api/option-trades/flow-alerts",
+                options_params,
+                high_priority=True
+            )
+            return options_result.get("data", [])
+        
+        # For non-high-priority requests, use the standard approach with fallbacks
         result = self._make_request("/api/alerts", params)
         data = result.get("data", [])
         
         if not data and (symbol or ticker):
             # Try using the options/trades endpoint directly if alerts returns no data
             logger.debug("Trying options/trades endpoint after empty alerts response")
-            options_params = {"limit": limit, "page": page}
+            options_params = {"limit": actual_limit, "page": page}
             
             if symbol:
                 options_params["symbol"] = symbol
@@ -320,7 +477,7 @@ class UnusualWhalesClient:
             if not data:
                 # If still no data, try screener/option-contracts
                 logger.debug("Trying screener/option-contracts endpoint")
-                screener_params = {"limit": limit, "page": page}
+                screener_params = {"limit": actual_limit, "page": page}
             
                 if symbol:
                     screener_params["ticker_symbol"] = symbol
@@ -337,7 +494,25 @@ class UnusualWhalesClient:
                 data = screener_result.get("data", [])
 
         if data:
-            logger.info(f"Retrieved {len(data)} options flow entries")
+            if not high_priority:  # Only log for non-high-priority to reduce overhead
+                logger.info(f"Retrieved {len(data)} options flow entries")
+                
+            # Cache the results if caching is enabled
+            if cache_results and cache_key:
+                self.__class__._options_flow_cache[cache_key] = data
+                self.__class__._cache_timestamps[cache_key] = time.time()
+                
+                # Limit cache size to prevent memory issues (keep last 100 queries)
+                if len(self.__class__._options_flow_cache) > 100:
+                    # Remove oldest cache entries
+                    oldest_keys = sorted(
+                        self.__class__._cache_timestamps.keys(),
+                        key=lambda k: self.__class__._cache_timestamps[k]
+                    )[:len(self.__class__._cache_timestamps) - 100]
+                    
+                    for key in oldest_keys:
+                        self.__class__._options_flow_cache.pop(key, None)
+                        self.__class__._cache_timestamps.pop(key, None)
         else:
             logger.warning("No options flow data returned from API after trying multiple endpoints")
             
@@ -558,17 +733,8 @@ class UnusualWhalesClient:
             if data:
                 result = data[0]
                 
-                # The API response no longer includes a 'score' field, but our tests expect it
-                # Calculate a synthetic score based on available metrics if it doesn't exist
-                if 'score' not in result:
-                    # Use IV rank as a base for the score if available
-                    if 'iv_rank' in result:
-                        result['score'] = float(result['iv_rank'])
-                    # Fallback to volatility if IV rank is not available
-                    elif 'volatility' in result:
-                        result['score'] = float(result['volatility']) * 10
-                    else:
-                        result['score'] = 50.0  # Default score if no metrics available
+                # Only use actual data from the API, no synthetic values
+                # If 'score' is not in the response, we don't add it
                 return result
 
             # If no data was returned, log a warning
@@ -852,6 +1018,76 @@ class UnusualWhalesClient:
                     df[col] = pd.to_numeric(df[col], errors="coerce") 
                 
         return df
+    
+    def can_take_position(self, ticker: str, value: float) -> bool:
+        """
+        Check if a position can be taken based on dollar-based limits.
+        
+        Args:
+            ticker: Ticker symbol
+            value: Position value in dollars
+            
+        Returns:
+            bool: Whether the position can be taken
+        """
+        # Reset daily tracking if it's a new day
+        current_date = datetime.now().date()
+        if current_date > self.last_reset_date:
+            logger.info(f"Resetting daily position tracking (new day: {current_date})")
+            self.current_daily_value = 0.0
+            self.position_values = {}
+            self.position_count = 0
+            self.last_reset_date = current_date
+        
+        # Check if adding this position would exceed the daily limit
+        if self.current_daily_value + value > self.max_daily_value:
+            logger.warning(f"Position for {ticker} (${value:.2f}) would exceed daily limit of ${self.max_daily_value:.2f} (current: ${self.current_daily_value:.2f})")
+            return False
+        
+        # Check if adding this position would exceed the per-stock limit
+        current_ticker_value = self.position_values.get(ticker, 0.0)
+        if current_ticker_value + value > self.max_position_value:
+            logger.warning(f"Position for {ticker} (${value:.2f}) would exceed per-stock limit of ${self.max_position_value:.2f} (current: ${current_ticker_value:.2f})")
+            return False
+        
+        return True
+    
+    def update_position_tracking(self, ticker: str, value: float) -> None:
+        """
+        Update position tracking after taking a position.
+        
+        Args:
+            ticker: Ticker symbol
+            value: Position value in dollars
+        """
+        # Update daily tracking
+        self.current_daily_value += value
+        
+        # Update per-stock tracking
+        current_ticker_value = self.position_values.get(ticker, 0.0)
+        self.position_values[ticker] = current_ticker_value + value
+        
+        # Update position count
+        self.position_count += 1
+        
+        logger.info(f"Position taken for {ticker}: ${value:.2f} (daily total: ${self.current_daily_value:.2f}/{self.max_daily_value:.2f}, ticker total: ${self.position_values[ticker]:.2f}/{self.max_position_value:.2f})")
+    
+    def get_position_limits(self) -> dict[str, float]:
+        """
+        Get current position limits and usage.
+        
+        Returns:
+            dict: Dictionary with position limit information
+        """
+        return {
+            "max_daily_value": self.max_daily_value,
+            "current_daily_value": self.current_daily_value,
+            "daily_remaining": max(0.0, self.max_daily_value - self.current_daily_value),
+            "max_position_value": self.max_position_value,
+            "position_values": self.position_values,
+            "position_count": self.position_count,
+            "last_reset_date": self.last_reset_date.isoformat()
+        }
     
     def close(self) -> None:
         """

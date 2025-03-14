@@ -53,7 +53,7 @@ class AlpacaClient:
         self.api_key = api_key or os.getenv("ALPACA_API_KEY")
         self.api_secret = api_secret or os.getenv("ALPACA_API_SECRET")
         self.base_url = base_url or os.getenv(
-            "ALPACA_API_ENDPOINT", "https://paper-api.alpaca.markets"
+            "ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets"
         )
 
         if not self.api_key or not self.api_secret:

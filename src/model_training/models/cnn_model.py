@@ -5,7 +5,10 @@ This module provides a Convolutional Neural Network (CNN) model for time series 
 """
 
 import logging
+import os
 import numpy as np
+
+# TensorFlow imports - Pylance may show errors but these will work at runtime
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense, Dropout
@@ -47,31 +50,54 @@ class CNNModel:
         
     def build_model(self):
         """
-        Build the CNN model.
+        Build the CNN model optimized for TensorFlow containers.
         
         Returns:
             tf.keras.Model: Built model
         """
+        # Check if running in NVIDIA container
+        is_nvidia_container = os.path.exists("/.dockerenv") and os.environ.get("NVIDIA_BUILD_ID")
+        if is_nvidia_container:
+            logger.info("Building CNN model in NVIDIA TensorFlow container")
+        
+        # Enable mixed precision for better performance on Tensor Cores
+        try:
+            policy = tf.keras.mixed_precision.Policy('mixed_float16')
+            tf.keras.mixed_precision.set_global_policy(policy)
+            logger.info("Mixed precision enabled for CNN model")
+        except Exception as e:
+            logger.warning(f"Could not enable mixed precision: {e}")
+        
         model = Sequential()
         
-        # First convolutional layer
-        model.add(Conv1D(filters=self.filters, 
-                         kernel_size=self.kernel_size, 
-                         activation='relu', 
-                         input_shape=self.input_shape))
+        # First convolutional layer with optimized configuration
+        model.add(Conv1D(filters=self.filters,
+                          kernel_size=self.kernel_size,
+                          activation='relu',
+                          input_shape=self.input_shape,
+                          kernel_initializer='he_uniform'))  # Better for ReLU
         model.add(MaxPooling1D(pool_size=self.pool_size))
+        model.add(tf.keras.layers.BatchNormalization())  # Add batch normalization for stability
         
-        # Second convolutional layer
-        model.add(Conv1D(filters=self.filters*2, 
-                         kernel_size=self.kernel_size, 
-                         activation='relu'))
+        # Second convolutional layer with optimized configuration
+        model.add(Conv1D(filters=self.filters*2,
+                          kernel_size=self.kernel_size,
+                          activation='relu',
+                          kernel_initializer='he_uniform'))
         model.add(MaxPooling1D(pool_size=self.pool_size))
+        model.add(tf.keras.layers.BatchNormalization())
         
         # Flatten and dense layers
         model.add(Flatten())
-        model.add(Dense(self.dense_units, activation='relu'))
+        model.add(Dense(self.dense_units,
+                        activation='relu',
+                        kernel_initializer='he_uniform',
+                        kernel_regularizer=tf.keras.regularizers.l2(0.001)))  # Add L2 regularization
         model.add(Dropout(self.dropout_rate))
-        model.add(Dense(self.dense_units // 2, activation='relu'))
+        model.add(Dense(self.dense_units // 2,
+                        activation='relu',
+                        kernel_initializer='he_uniform',
+                        kernel_regularizer=tf.keras.regularizers.l2(0.001)))
         model.add(Dropout(self.dropout_rate))
         
         # Output layer
@@ -80,12 +106,25 @@ class CNNModel:
         else:
             model.add(Dense(self.output_dim, activation='softmax'))  # Classification
         
-        # Compile model
-        optimizer = Adam(learning_rate=self.learning_rate)
+        # Compile model with optimized settings
+        optimizer = Adam(
+            learning_rate=self.learning_rate,
+            epsilon=1e-7,  # Improved numerical stability
+            amsgrad=True   # Improved convergence
+        )
+        
         if self.output_dim == 1:
-            model.compile(optimizer=optimizer, loss='mse', metrics=['mae'])
+            model.compile(
+                optimizer=optimizer,
+                loss='mse',
+                metrics=['mae', tf.keras.metrics.RootMeanSquaredError()]
+            )
         else:
-            model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy'])
+            model.compile(
+                optimizer=optimizer,
+                loss='categorical_crossentropy',
+                metrics=['accuracy', tf.keras.metrics.AUC()]
+            )
         
         self.model = model
         return model

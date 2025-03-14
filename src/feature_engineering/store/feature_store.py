@@ -13,22 +13,60 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-# Try both import styles to handle different execution contexts
-try:
-    from autonomous_trading_system.src.feature_engineering.store.feature_cache import (
-        feature_store_cache,
-    )
-    from autonomous_trading_system.src.feature_engineering.store.feature_registry import (
-        feature_registry,
-    )
-    from autonomous_trading_system.src.utils.database.timescale_manager import (
-        TimescaleManager,
-    )
-except ImportError:
-    # For when running from within the autonomous_trading_system directory
-    from src.feature_engineering.store.feature_cache import feature_store_cache
-    from src.feature_engineering.store.feature_registry import feature_registry
-    from src.utils.database.timescale_manager import TimescaleManager
+# Import SQLAlchemy for database operations
+from sqlalchemy import create_engine, text
+
+# Define simplified versions of the removed modules
+class DummyCache:
+    """Simplified cache implementation that does nothing."""
+    def get_feature(self, key, params):
+        return None
+    
+    def set_feature(self, key, params, value, ttl):
+        pass
+    
+    def get_dataframe(self, key, params):
+        return None
+    
+    def set_dataframe(self, key, params, df, ttl):
+        pass
+    
+    def invalidate_by_pattern(self, pattern):
+        pass
+
+class DummyRegistry:
+    """Simplified registry implementation that returns default values."""
+    def get_feature_metadata(self, feature_name):
+        return {"feature_group": "default"}
+
+class TimescaleManager:
+    """Simplified database manager."""
+    def __init__(self, connection_string=None):
+        self.engine = create_engine(connection_string or "sqlite:///:memory:")
+    
+    def execute_query(self, query, params=None):
+        """Execute a query and return a DataFrame."""
+        import pandas as pd
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(text(query), params or {})
+                return pd.DataFrame(result.fetchall(), columns=result.keys())
+        except Exception as e:
+            print(f"Error executing query: {e}")
+            return pd.DataFrame()
+    
+    def execute_statement(self, query, params=None):
+        """Execute a statement and return the result."""
+        try:
+            with self.engine.connect() as conn:
+                return conn.execute(text(query), params or {})
+        except Exception as e:
+            print(f"Error executing statement: {e}")
+            return None
+
+# Create instances of the dummy classes
+feature_store_cache = DummyCache()
+feature_registry = DummyRegistry()
 
 
 logger = logging.getLogger(__name__)

@@ -6,6 +6,7 @@ based on model predictions and market conditions.
 """
 
 import logging
+import pandas as pd
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -30,6 +31,8 @@ class EntrySignalGenerator:
 
     def __init__(
         self,
+        model_registry=None,
+        feature_pipeline=None,
         min_signal_strength: float = 0.6,  # Minimum signal strength (0-1)
         min_conviction: float = 0.7,  # Minimum conviction score (0-1)
         use_multi_timeframe_confirmation: bool = True,  # Whether to require multi-timeframe confirmation
@@ -41,6 +44,8 @@ class EntrySignalGenerator:
         Initialize the EntrySignalGenerator.
 
         Args:
+            model_registry: Model registry for loading models
+            feature_pipeline: Feature pipeline for generating features
             min_signal_strength: Minimum signal strength required (0-1)
             min_conviction: Minimum conviction score required (0-1)
             use_multi_timeframe_confirmation: Whether to require multi-timeframe confirmation
@@ -48,6 +53,8 @@ class EntrySignalGenerator:
             max_signals_per_day: Maximum number of signals to generate per day
             signal_expiration_hours: Signal expiration time in hours
         """
+        self.model_registry = model_registry
+        self.feature_pipeline = feature_pipeline
         self.min_signal_strength = min_signal_strength
         self.min_conviction = min_conviction
         self.use_multi_timeframe_confirmation = use_multi_timeframe_confirmation
@@ -217,6 +224,63 @@ class EntrySignalGenerator:
 
         return signal
 
+    def generate_signal(self, ticker: str, df: pd.DataFrame) -> dict[str, Any] | None:
+        """
+        Generate a trading signal using model inference.
+        
+        Args:
+            ticker: Ticker symbol
+            df: DataFrame with features
+            
+        Returns:
+            Signal dictionary or None if no signal
+        """
+        if self.model_registry is None or self.feature_pipeline is None:
+            logger.error("Model registry and feature pipeline are required for signal generation")
+            return None
+            
+        try:
+            # Generate features if needed
+            if len(df.columns) < 10:  # Assuming raw data has fewer columns than feature-rich data
+                logger.info(f"Generating features for {ticker}")
+                df = self.feature_pipeline.generate_technical_indicators(df)
+                df = self.feature_pipeline.generate_price_features(df)
+                df = self.feature_pipeline.generate_volume_features(df)
+                df = self.feature_pipeline.generate_volatility_features(df)
+            
+            # Get latest price
+            if 'close' in df.columns:
+                current_price = df['close'].iloc[-1]
+            else:
+                current_price = 0.0
+                logger.warning(f"No close price found for {ticker}, using default value {current_price}")
+            
+            # Create model inference engine
+            from src.model_training.models.inference.model_inference import ModelInference
+            model_inference = ModelInference(model_registry=self.model_registry)
+            
+            # Generate signal
+            signal = model_inference.generate_signal(ticker, df, confidence_threshold=self.min_signal_strength)
+            
+            if signal:
+                # Add additional metadata
+                signal['conviction'] = signal.get('confidence', 0.0)
+                signal['signal_strength'] = signal.get('confidence', 0.0)
+                signal['timestamp'] = pd.Timestamp.now()
+                signal['expiration_time'] = signal['timestamp'] + timedelta(hours=self.signal_expiration_hours)
+                signal['status'] = 'active'
+                
+                # Add to signals list
+                self.signals.append(signal)
+                
+                logger.info(f"Generated {signal['direction']} signal for {ticker} with confidence {signal['confidence']:.4f}")
+                
+            return signal
+            
+        except Exception as e:
+            logger.error(f"Error generating signal for {ticker}: {e}")
+            return None
+    
     def generate_entry_signals_batch(
         self,
         tickers: list[str],

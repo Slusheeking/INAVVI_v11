@@ -7,7 +7,6 @@ trade execution times, model accuracy, data quality, and system latency.
 """
 
 import logging
-import time
 
 class PerformanceMetrics:
     """Collects and reports performance metrics for the trading system."""

@@ -13,8 +13,8 @@ from typing import Any, Dict, List, Optional, Union
 # Import pandas and numpy directly
 import pandas as pd
 
-from autonomous_trading_system.src.trading_strategy.alpaca.alpaca_client import AlpacaClient
-from autonomous_trading_system.src.data_acquisition.api.polygon_client import (
+from src.trading_strategy.alpaca.alpaca_client import AlpacaClient
+from src.data_acquisition.api.polygon_client import (
     PolygonClient
 )
 

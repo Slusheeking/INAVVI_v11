@@ -9,8 +9,8 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Union
-from autonomous_trading_system.src.trading_strategy.alpaca.alpaca_client import AlpacaClient
-from autonomous_trading_system.src.data_acquisition.api.polygon_client import PolygonClient
+from src.trading_strategy.alpaca.alpaca_client import AlpacaClient
+from src.data_acquisition.api.polygon_client import PolygonClient
 
 # Import pandas and numpy directly
 import pandas as pd

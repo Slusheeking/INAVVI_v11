@@ -7,29 +7,16 @@ execution simulation, and strategy evaluation.
 """
 
 import datetime
-import importlib
-import json
 import uuid
-from pathlib import Path
-import os
-from typing import Any, Dict, List, Optional
 import pandas as pd
+from typing import Any, Dict, List, Optional
 
-from ...config.backtesting_config import BacktestingConfig
-from ..analysis.backtest_analyzer import (
-    BacktestAnalyzer,
-)
-from ..analysis.strategy_evaluator import (
-    StrategyEvaluator,
-)
-from .execution_simulator import (
-    ExecutionSimulator,
-)
-from .market_simulator import (
-    MarketSimulator,
-)
-from ...utils.time.market_calendar import MarketCalendar
-from ...utils.logging.logger import setup_logger
+# Use absolute imports instead of relative imports
+from src.utils.logging.logger import setup_logger
+from src.backtesting.analysis.backtest_analyzer import BacktestAnalyzer
+from src.backtesting.analysis.strategy_evaluator import StrategyEvaluator
+from src.backtesting.engine.execution_simulator import ExecutionSimulator
+from src.backtesting.engine.market_simulator import MarketSimulator
 
 
 class BacktestEngine:
@@ -43,8 +30,14 @@ class BacktestEngine:
 
     def __init__(
         self,
-        start_date: str,
-        end_date: str,
+        storage=None,
+        feature_pipeline=None,
+        model_registry=None,
+        position_sizer=None,
+        stop_loss_manager=None,
+        profit_target_manager=None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         initial_capital: float = 100000.0,
         execution_model: str = "realistic",
         data_source: str = "timescaledb",
@@ -72,9 +65,23 @@ class BacktestEngine:
         # Set up logging
         self.logger = setup_logger(__name__, log_level)
 
+        # Store external components
+        self.storage = storage
+        self.feature_pipeline = feature_pipeline
+        self.model_registry = model_registry
+        self.position_sizer = position_sizer
+        self.stop_loss_manager = stop_loss_manager
+        self.profit_target_manager = profit_target_manager
+
         # Store configuration
-        self.start_date = datetime.datetime.strptime(start_date, "%Y-%m-%d")
-        self.end_date = datetime.datetime.strptime(end_date, "%Y-%m-%d")
+        if start_date and end_date:
+            self.start_date = datetime.datetime.strptime(start_date, "%Y-%m-%d")
+            self.end_date = datetime.datetime.strptime(end_date, "%Y-%m-%d")
+        else:
+            # Default to last 90 days if dates not provided
+            self.end_date = datetime.datetime.now()
+            self.start_date = self.end_date - datetime.timedelta(days=90)
+            
         self.initial_capital = initial_capital
         self.execution_model = execution_model
         self.data_source = data_source
@@ -127,597 +134,322 @@ class BacktestEngine:
         # Generate a unique ID for this backtest
         self.backtest_id = str(uuid.uuid4())
 
-        self.logger.info(f"BacktestEngine initialized with ID {self.backtest_id} for period {start_date} to {end_date}")
-
-    def set_universe(self, symbols: List[str]) -> None:
+        self.logger.info(f"BacktestEngine initialized with ID {self.backtest_id}")
+        
+    def run_backtest(self, ticker: str, data: pd.DataFrame, strategy_params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Set the universe of tradable symbols for the backtest.
-
+        Run a backtest for a specific ticker with the given data and strategy parameters.
+        
         Args:
-            symbols: List of ticker symbols
-        """
-        self.universe = symbols
-        self.logger.info(f"Universe set with {len(symbols)} symbols: {', '.join(symbols[:5])}{' and more' if len(symbols) > 5 else ''}")
-
-        # Load market data for the universe
-        self.market_simulator.load_data(symbols)
-
-    def load_strategy(self, strategy_name: str, version: str = "latest") -> Any:
-        """
-        Load a trading strategy by name and version.
-
-        Args:
-            strategy_name: Name of the strategy
-            version: Version of the strategy
-
+            ticker: The ticker symbol to backtest
+            data: Historical price data for the ticker
+            strategy_params: Parameters for the trading strategy
+            
         Returns:
-            The loaded strategy object
+            Dict containing backtest results
         """
-        # Construct the strategy path
-        strategy_module_path = f"src.trading_strategy.strategies.{strategy_name.lower()}"
-
-        try:
-            # Import the strategy module
-            strategy_module = importlib.import_module(strategy_module_path)
-
-            # Load the strategy class
-            strategy_class = getattr(strategy_module, strategy_name)
-
-            # Load strategy configuration
-            # Try multiple possible locations for the config file
-            # First, try to get the project root directory
-            project_root = Path(__file__).parent.parent.parent.parent
-            
-            possible_paths = [
-                # Project root / configs / strategies
-                project_root / "configs" / "strategies" / f"{strategy_name.lower()}_{version}.json",
-                # Project root / src / config
-                project_root / "src" / "config" / f"strategy_{strategy_name.lower()}.json",
-                # Current directory / configs / strategies
-                Path(os.getcwd()) / "configs" / "strategies" / f"{strategy_name.lower()}_{version}.json",
-                # From backtesting config
-                Path(BacktestingConfig().get_full_config().get("strategy_config_path", "")) / f"{strategy_name.lower()}_{version}.json"
-            ]
-            
-            config_path = next((p for p in possible_paths if p.exists()), possible_paths[0])
-            
-            self.logger.debug(f"Looking for strategy config at: {config_path.absolute()}")
-            self.logger.debug(f"Current working directory: {Path.cwd()}")
-            if config_path.exists():
-                with open(config_path) as f:
-                    self.strategy_config = json.load(f)
-            else:
-                self.logger.warning(
-                    f"Strategy configuration file not found: {config_path}"
-                )
-                self.logger.warning(f"Tried paths: {[str(p) for p in possible_paths]}")
-                self.strategy_config = {}
-
-            # Initialize the strategy
-            self.strategy = strategy_class(self.strategy_config)
-            self.logger.info(
-                f"Strategy {strategy_name} (version {version}) loaded successfully"
-            )
-
-            return self.strategy
-
-        except (ImportError, AttributeError) as e:
-            self.logger.error(f"Failed to load strategy {strategy_name}: {str(e)}")
-            raise ValueError(f"Strategy {strategy_name} could not be loaded: {str(e)}")
-
-    def run(self) -> Dict[str, Any]:
-        """
-        Run the backtest with the configured settings.
-
-        Returns:
-            Dictionary containing backtest results
-        """
-        if not self.universe:
-            self.logger.error(
-                "Universe not set. Call set_universe() before running the backtest."
-            )
-            raise ValueError("Universe not set")
-
-        if not self.strategy:
-            self.logger.error(
-                "Strategy not loaded. Call load_strategy() before running the backtest."
-            )
-            raise ValueError("Strategy not loaded")
-
-        self.logger.info(
-            f"Starting backtest from {self.start_date.date()} to {self.end_date.date()}"
-        )
-
-        # Initialize results containers
+        self.logger.info(f"Running backtest for {ticker} with {len(data)} data points")
+        
+        # Initialize results
         trades = []
         portfolio_history = []
-        signals = []
-
-        # Get the market calendar (default to NYSE)
-        market_calendar = MarketCalendar(exchange="NYSE")
-
-        # Convert string dates to datetime objects
-        start_date_dt = self.start_date
-        end_date_dt = self.end_date
-
-        # Get all trading days in the backtest period
-        trading_days = market_calendar.get_trading_days(start_date_dt, end_date_dt)
-
-        # Main backtest loop
-        for day in trading_days:
-            self.logger.debug(f"Processing day: {day}")
-
-            # Get market data for the current day
-            try:
-                self.logger.debug(f"Fetching market data for {day}")
-            except Exception as e:
-                self.logger.error(f"Error logging day: {str(e)}")
-            market_data = self.market_simulator.get_data_for_date(day)
-
-            if not market_data:
-                self.logger.warning(f"No market data available for {day}")
-                continue
-
-            # Generate trading signals
-            try:
-                self.logger.debug(f"Generating signals for {day}")
-                day_signals = self.strategy.generate_signals(market_data, self.portfolio)
-                signals.extend(day_signals)
-                if day_signals:
-                    self.logger.info(f"Generated {len(day_signals)} signals for {day}")
-            except Exception as e:
-                self.logger.error(f"Error generating signals for {day}: {str(e)}")
-                day_signals = []
-
-            # Execute signals
-            try:
-                self.logger.debug(f"Executing signals for {day}")
-                day_trades = self.execution_simulator.execute_signals(
-                    signals=day_signals, market_data=market_data, portfolio=self.portfolio
-                )
-                if day_trades:
-                    self.logger.info(f"Executed {len(day_trades)} trades for {day}")
-                    for trade in day_trades:
-                        self.logger.debug(f"Trade: {trade['symbol']} {trade['quantity']} @ {trade['price']}")
-            except Exception as e:
-                self.logger.error(f"Error executing signals for {day}: {str(e)}")
-                self.logger.error(f"Portfolio state: Cash={self.portfolio['cash']}, Equity={self.portfolio['equity']}")
-                day_trades = []
-                
-            trades.extend(day_trades)
-
-            # Update portfolio
-            self._update_portfolio(day_trades, market_data, day)
-
-            # Record portfolio state
-            portfolio_snapshot = self._get_portfolio_snapshot(day)
-            portfolio_history.append(portfolio_snapshot)
-
-        # Compile results
-        self.results = {
-            "backtest_id": self.backtest_id,
-            "start_date": self.start_date.strftime("%Y-%m-%d"),
-            "end_date": self.end_date.strftime("%Y-%m-%d"),
-            "initial_capital": self.initial_capital,
-            "final_equity": self.portfolio["equity"],
-            "trades": trades,
-            "signals": signals,
-            "portfolio_history": portfolio_history,
-            "universe": self.universe,
-            "strategy": self.strategy.__class__.__name__,
-            "strategy_config": self.strategy_config,
-            "execution_model": self.execution_model,
-            "commission_model": self.commission_model,
-            "slippage_model": self.slippage_model,
-            "market_impact_model": self.market_impact_model,
-        }
-
-        # Analyze results
-        self.results["metrics"] = self.analyzer.calculate_metrics(self.results)
-
-        self.logger.info(
-            f"Backtest completed. Initial capital: ${self.initial_capital:.2f}, Final equity: ${self.portfolio['equity']:.2f}, Return: {((self.portfolio['equity'] / self.initial_capital) - 1) * 100:.2f}%"
-        )
-
-        return self.results
-
-    def get_analyzer(self) -> BacktestAnalyzer:
-        """
-        Get the backtest analyzer instance.
-
-        Returns:
-            The BacktestAnalyzer instance
-        """
-        return self.analyzer
-
-    def save_results(self, output_dir: str) -> str:
-        """
-        Save backtest results to disk.
-
-        Args:
-            output_dir: Directory to save results
-
-        Returns:
-            Path to the saved results file
-        """
-        if not self.results:
-            self.logger.error("No results to save. Run the backtest first.")
-            raise ValueError("No results to save")
-
-        # Create output directory if it doesn't exist
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        # Save results to JSON file
-        results_file = output_path / f"backtest_{self.backtest_id}.json"
-
-        # Convert complex objects to serializable format
-        serializable_results = self._prepare_results_for_serialization(self.results)
-
-        with open(results_file, "w") as f:
-            json.dump(serializable_results, f, indent=2)
-
-        self.logger.info(f"Results saved to {results_file}")
-
-        return str(results_file)
-
-    def run_walk_forward(
-        self, training_window: int, testing_window: int, step_size: int = None
-    ) -> Dict[str, Any]:
-        """
-        Run a walk-forward optimization backtest.
-
-        Args:
-            training_window: Number of days for the training window
-            testing_window: Number of days for the testing window
-            step_size: Number of days to step forward (defaults to testing_window)
-
-        Returns:
-            Dictionary containing walk-forward backtest results
-        """
-        if step_size is None:
-            step_size = testing_window
-
-        # Get the market calendar
-        market_calendar = MarketCalendar(exchange="NYSE")
-
-        # Convert string dates to datetime objects
-        start_date_dt = self.start_date
-        end_date_dt = self.end_date
-
-        # Get all trading days in the backtest period
-        all_trading_days = market_calendar.get_trading_days(
-            start_date_dt, end_date_dt
-        )
-
-        if len(all_trading_days) < training_window + testing_window:
-            self.logger.error(
-                f"Insufficient data for walk-forward testing. Need at least {training_window + testing_window} trading days."
-            )
-            raise ValueError("Insufficient data for walk-forward testing")
-
-        walk_forward_results = []
-
-        # Walk forward through the data
-        for i in range(
-            0, len(all_trading_days) - (training_window + testing_window) + 1, step_size
-        ):
-            # Define training and testing periods
-            train_start_idx = i
-            train_end_idx = i + training_window - 1
-            test_start_idx = train_end_idx + 1
-            test_end_idx = min(
-                test_start_idx + testing_window - 1, len(all_trading_days) - 1
-            )
-
-            train_start = all_trading_days[train_start_idx]
-            train_end = all_trading_days[train_end_idx]
-            test_start = all_trading_days[test_start_idx]
-            test_end = all_trading_days[test_end_idx]
-
-            self.logger.info(
-                f"Walk-forward iteration: Training {train_start} to {train_end}, Testing {test_start} to {test_end}"
-            )
-
-            # Train the strategy
-            self.strategy.train(
-                market_data=self.market_simulator.get_data_for_period(
-                    train_start, train_end
-                ),
-                universe=self.universe,
-            )
-
-            # Run backtest on the test period
-            test_engine = BacktestEngine(
-                start_date=test_start,
-                end_date=test_end,
-                initial_capital=self.initial_capital,
-                execution_model=self.execution_model,
-                data_source=self.data_source,
-                timeframes=self.timeframes,
-                commission_model=self.commission_model,
-                slippage_model=self.slippage_model,
-                market_impact_model=self.market_impact_model,
-            )
-            test_engine.set_universe(self.universe)
-            test_engine.strategy = self.strategy  # Use the trained strategy
-
-            # Run the test period backtest
-            test_results = test_engine.run()
-
-            # Store the results for this walk-forward iteration
-            walk_forward_results.append(
-                {
-                    "train_start": train_start,
-                    "train_end": train_end,
-                    "test_start": test_start,
-                    "test_end": test_end,
-                    "results": test_results,
-                }
-            )
-
-        # Compile overall walk-forward results
-        combined_results = self._combine_walk_forward_results(walk_forward_results)
-
-        return combined_results
-
-    def run_monte_carlo(self, num_simulations: int = 1000) -> Dict[str, Any]:
-        """
-        Run Monte Carlo simulations on the backtest results.
-
-        Args:
-            num_simulations: Number of Monte Carlo simulations to run
-
-        Returns:
-            Dictionary containing Monte Carlo simulation results
-        """
-        if not self.results:
-            self.logger.error("No results to analyze. Run the backtest first.")
-            raise ValueError("No results to analyze")
-
-        # Get the trades from the backtest results
-        trades = self.results["trades"]
-
-        if not trades:
-            self.logger.warning("No trades to analyze for Monte Carlo simulation")
-            return {"error": "No trades to analyze"}
-
-        # Run Monte Carlo simulation
-        mc_results = self.analyzer.run_monte_carlo_simulation(
-            trades=trades,
-            initial_capital=self.initial_capital,
-            num_simulations=num_simulations,
-        )
-
-        return mc_results
-
-    def _update_portfolio(
-        self, trades: List[Dict], market_data: Dict, date: str
-    ) -> bool:
-        """
-        Update the portfolio based on executed trades and current market data.
-
-        Args:
-            trades: List of executed trades
-            market_data: Current market data
-            date: Current date
-            
-        Returns:
-            bool: True if portfolio was updated successfully, False otherwise
-        """
-        if not trades:
-            return True
-            
-        # Process trades with validation
-        for trade in trades:
-            symbol = trade["symbol"]
-            quantity = trade["quantity"]
-            price = trade["price"]
-            commission = trade["commission"]
-
-            # Update cash
-            try:
-                trade_value = quantity * price
-            except TypeError as e:
-                self.logger.error(f"Error calculating trade value: {str(e)}")
-                self.logger.error(f"Trade details: symbol={symbol}, quantity={quantity}, price={price}")
-                return False
-                
-            self.portfolio["cash"] -= trade_value + commission
-
-            # Update positions
-            if symbol not in self.portfolio["positions"]:
-                self.portfolio["positions"][symbol] = {
-                    "quantity": 0,
-                    "cost_basis": 0,
-                    "market_value": 0,
-                }
-
-            current_position = self.portfolio["positions"][symbol]
-
-            if quantity > 0:  # Buy
-                # Update cost basis
-                try:
-                    total_cost = (
-                        current_position["quantity"] * current_position["cost_basis"]
-                    )
-                    new_total_cost = total_cost + (quantity * price)
-                    new_total_quantity = current_position["quantity"] + quantity
-
-                    if new_total_quantity > 0:
-                        current_position["cost_basis"] = new_total_cost / new_total_quantity
-                except (TypeError, ZeroDivisionError) as e:
-                    self.logger.error(f"Error updating cost basis: {str(e)}")
-                    self.logger.error(
-                        f"Position details: quantity={current_position['quantity']}, "
-                        f"cost_basis={current_position['cost_basis']}, new_quantity={quantity}, price={price}"
-                    )
-
-                current_position["quantity"] += quantity
-
-            else:  # Sell
-                current_position[
-                    "quantity"
-                ] += quantity  # quantity is negative for sells
-
-                # If position is closed, reset cost basis
-                if current_position["quantity"] == 0:
-                    current_position["cost_basis"] = 0
-
-        # Update market values
-        portfolio_value = self.portfolio["cash"]
-
-        for symbol, position in self.portfolio["positions"].items():
-            if position["quantity"] != 0:
-                # Get latest price
-                try:
-                    if symbol in market_data:
-                        # Find the first timeframe with data
-                        for timeframe in self.timeframes:
-                            if timeframe in market_data[symbol] and isinstance(market_data[symbol][timeframe], pd.DataFrame):
-                                if not market_data[symbol][timeframe].empty and "close" in market_data[symbol][timeframe].columns:
-                                    latest_price = market_data[symbol][timeframe]["close"].iloc[-1]
-                                    position["market_value"] = position["quantity"] * latest_price
-                                    portfolio_value += position["market_value"]
-                                    break
-                except Exception as e:
-                    self.logger.error(f"Error updating market value for {symbol}: {str(e)}")
-                    self.logger.error(f"Position: {position}, Market data keys: {list(market_data.keys() if market_data else [])}")
-
-        # Update portfolio equity
-        self.portfolio["equity"] = portfolio_value
-
-        # Record portfolio state
-        self.portfolio["history"].append(
-            {"date": date, "cash": self.portfolio["cash"], "equity": portfolio_value}
-        )
+        current_position = None
         
-        return True
-
-    def _get_portfolio_snapshot(self, date: str) -> Dict[str, Any]:
-        """
-        Get a snapshot of the portfolio state for a given date.
-
-        Args:
-            date: Date for the snapshot
-
-        Returns:
-            Dictionary containing portfolio state
-        """
-        positions = []
-
-        for symbol, position in self.portfolio["positions"].items():
-            if position["quantity"] != 0:
-                positions.append(
-                    {
-                        "symbol": symbol,
-                        "quantity": position["quantity"],
-                        "cost_basis": position["cost_basis"],
-                        "market_value": position["market_value"],
-                    }
-                )
-
-        return {
-            "date": date,
-            "cash": self.portfolio["cash"],
-            "equity": self.portfolio["equity"],
-            "positions": positions,
+        # Set initial portfolio state
+        portfolio = {
+            "cash": self.initial_capital,
+            "positions": {},
+            "equity": self.initial_capital,
         }
-
-    def _prepare_results_for_serialization(self, results: Dict) -> Dict:
-        """
-        Prepare results dictionary for JSON serialization.
-
-        Args:
-            results: Results dictionary
-
-        Returns:
-            Serializable results dictionary
-        """
-        serializable = {}
-
-        for key, value in results.items():
-            if isinstance(value, (str, int, float, bool, type(None))):
-                serializable[key] = value
-            elif isinstance(value, (datetime.datetime, datetime.date)):
-                serializable[key] = value.isoformat()
-            elif isinstance(value, (list, tuple)):
-                serializable[key] = [
-                    self._prepare_results_for_serialization(item)
-                    if isinstance(item, dict)
-                    else item
-                    for item in value
-                ]
-            elif isinstance(value, dict):
-                serializable[key] = self._prepare_results_for_serialization(value)
-            elif hasattr(value, "__dict__"):
-                serializable[key] = str(value)
-            else:
-                serializable[key] = str(value)
-
-        return serializable
-
-    def _combine_walk_forward_results(self, walk_forward_results: List[Dict]) -> Dict:
-        """
-        Combine results from multiple walk-forward iterations.
-
-        Args:
-            walk_forward_results: List of walk-forward iteration results
-
-        Returns:
-            Combined walk-forward results
-        """
-        if not walk_forward_results:
-            return {}
-
-        # Extract test period results
-        test_results = [wf["results"] for wf in walk_forward_results]
-
-        # Combine portfolio histories
-        combined_portfolio_history = []
-        for result in test_results:
-            combined_portfolio_history.extend(result["portfolio_history"])
-
-        # Sort by date
-        combined_portfolio_history.sort(key=lambda x: x["date"])
-
-        # Combine trades
-        combined_trades = []
-        for result in test_results:
-            combined_trades.extend(result["trades"])
-
-        # Sort by date
-        combined_trades.sort(key=lambda x: x["timestamp"])
-
-        # Calculate overall metrics
-        overall_metrics = self.analyzer.calculate_metrics(
-            {
-                "initial_capital": self.initial_capital,
-                "portfolio_history": combined_portfolio_history,
-                "trades": combined_trades,
+        
+        # Extract strategy parameters
+        stop_loss_pct = strategy_params.get('stop_loss_pct', 0.02)
+        profit_target_pct = strategy_params.get('profit_target_pct', 0.03)
+        entry_threshold = strategy_params.get('entry_threshold', 0.6)
+        exit_threshold = strategy_params.get('exit_threshold', 0.4)
+        
+        # Generate features if feature pipeline is available
+        if self.feature_pipeline and 'open' in data.columns:
+            self.logger.info(f"Generating features for {ticker}")
+            try:
+                data = self.feature_pipeline.generate_technical_indicators(data)
+                data = self.feature_pipeline.generate_price_features(data)
+                data = self.feature_pipeline.generate_volume_features(data)
+                data = self.feature_pipeline.generate_volatility_features(data)
+            except Exception as e:
+                self.logger.error(f"Error generating features: {e}")
+        
+        # Iterate through data
+        for i, (timestamp, row) in enumerate(data.iterrows()):
+            # Skip first few rows to allow for indicator calculation
+            if i < 10:
+                continue
+                
+            # Current market data
+            market_data = {
+                'timestamp': timestamp,
+                'open': row['open'] if 'open' in row else 0,
+                'high': row['high'] if 'high' in row else 0,
+                'low': row['low'] if 'low' in row else 0,
+                'close': row['close'] if 'close' in row else 0,
+                'volume': row['volume'] if 'volume' in row else 0,
+                'price': row['close'] if 'close' in row else 0,
             }
-        )
-
-        # Create combined results
-        combined_results = {
-            "backtest_id": f"wf_{self.backtest_id}",
-            "start_date": walk_forward_results[0]["train_start"],
-            "end_date": walk_forward_results[-1]["test_end"],
-            "initial_capital": self.initial_capital,
-            "final_equity": combined_portfolio_history[-1]["equity"]
-            if combined_portfolio_history
-            else self.initial_capital,
-            "trades": combined_trades,
-            "portfolio_history": combined_portfolio_history,
-            "metrics": overall_metrics,
-            "walk_forward_iterations": walk_forward_results,
-            "universe": self.universe,
-            "strategy": self.strategy.__class__.__name__,
-            "strategy_config": self.strategy_config,
-            "execution_model": self.execution_model,
-            "commission_model": self.commission_model,
-            "slippage_model": self.slippage_model,
-            "market_impact_model": self.market_impact_model,
+            
+            # Update portfolio value
+            if current_position:
+                # Update position value
+                position_value = current_position['quantity'] * market_data['price']
+                portfolio['positions'][ticker] = position_value
+            else:
+                portfolio['positions'][ticker] = 0
+                
+            # Calculate equity
+            portfolio['equity'] = portfolio['cash'] + sum(portfolio['positions'].values())
+            
+            # Record portfolio history
+            portfolio_history.append({
+                'timestamp': timestamp,
+                'cash': portfolio['cash'],
+                'equity': portfolio['equity'],
+                'positions': portfolio['positions'].copy()
+            })
+            
+            # Generate trading signal
+            signal = None
+            if self.model_registry:
+                try:
+                    # Get model for this ticker
+                    model = self.model_registry.get_latest_model(ticker, 'xgboost')
+                    if model:
+                        # Prepare features
+                        features = data.iloc[i].drop(['open', 'high', 'low', 'close', 'volume', 'timestamp'],
+                                                    errors='ignore').values.reshape(1, -1)
+                        # Generate prediction
+                        prediction = model.predict_proba(features)[0][1] if hasattr(model, 'predict_proba') else model.predict(features)[0]
+                        
+                        # Determine signal
+                        if not current_position and prediction > entry_threshold:
+                            signal = {'direction': 'buy', 'confidence': prediction}
+                        elif current_position and prediction < exit_threshold:
+                            signal = {'direction': 'sell', 'confidence': 1 - prediction}
+                except Exception as e:
+                    self.logger.error(f"Error generating signal: {e}")
+            
+            # Simple strategy if no model is available
+            if not signal and i > 20:
+                # Simple moving average crossover
+                if 'close' in data.columns:
+                    short_ma = data['close'].iloc[i-10:i].mean()
+                    long_ma = data['close'].iloc[i-20:i].mean()
+                    
+                    if not current_position and short_ma > long_ma:
+                        signal = {'direction': 'buy', 'confidence': 0.6}
+                    elif current_position and short_ma < long_ma:
+                        signal = {'direction': 'sell', 'confidence': 0.6}
+            
+            # Process signals
+            if signal:
+                if signal['direction'] == 'buy' and not current_position:
+                    # Calculate position size
+                    price = market_data['price']
+                    quantity = 0
+                    
+                    if self.position_sizer:
+                        quantity = self.position_sizer.calculate_position_size(
+                            ticker=ticker,
+                            price=price,
+                            direction='buy'
+                        )
+                    else:
+                        # Simple position sizing: 10% of portfolio
+                        quantity = int((portfolio['equity'] * 0.1) / price)
+                    
+                    if quantity > 0:
+                        # Create order
+                        order = {
+                            'symbol': ticker,
+                            'qty': quantity,
+                            'side': 'buy',
+                            'type': 'market',
+                            'time_in_force': 'day',
+                            'limit_price': None
+                        }
+                        
+                        # Execute order
+                        execution = self.execution_simulator.execute_order(order, market_data)
+                        
+                        # Update portfolio
+                        cost = execution['execution_price'] * execution['quantity'] + execution['commission']
+                        portfolio['cash'] -= cost
+                        
+                        # Record position
+                        current_position = {
+                            'entry_time': timestamp,
+                            'entry_price': execution['execution_price'],
+                            'quantity': execution['quantity'],
+                            'stop_loss': execution['execution_price'] * (1 - stop_loss_pct),
+                            'profit_target': execution['execution_price'] * (1 + profit_target_pct),
+                            'symbol': ticker
+                        }
+                        
+                        self.logger.debug(f"Opened position: {current_position}")
+                
+                elif signal['direction'] == 'sell' and current_position:
+                    # Create order
+                    order = {
+                        'symbol': ticker,
+                        'qty': current_position['quantity'],
+                        'side': 'sell',
+                        'type': 'market',
+                        'time_in_force': 'day',
+                        'limit_price': None
+                    }
+                    
+                    # Execute order
+                    execution = self.execution_simulator.execute_order(order, market_data)
+                    
+                    # Update portfolio
+                    proceeds = execution['execution_price'] * execution['quantity'] - execution['commission']
+                    portfolio['cash'] += proceeds
+                    
+                    # Record trade
+                    trade = {
+                        'entry_time': current_position['entry_time'],
+                        'exit_time': timestamp,
+                        'entry_price': current_position['entry_price'],
+                        'exit_price': execution['execution_price'],
+                        'quantity': current_position['quantity'],
+                        'symbol': ticker,
+                        'pnl': (execution['execution_price'] - current_position['entry_price']) * current_position['quantity'] - execution['commission'],
+                        'exit_reason': 'signal'
+                    }
+                    trades.append(trade)
+                    
+                    self.logger.debug(f"Closed position: {trade}")
+                    
+                    # Clear current position
+                    current_position = None
+            
+            # Check stop loss and profit target
+            if current_position:
+                # Check stop loss
+                if market_data['price'] <= current_position['stop_loss'] and self.stop_loss_manager:
+                    # Create order
+                    order = {
+                        'symbol': ticker,
+                        'qty': current_position['quantity'],
+                        'side': 'sell',
+                        'type': 'market',
+                        'time_in_force': 'day',
+                        'limit_price': None
+                    }
+                    
+                    # Execute order
+                    execution = self.execution_simulator.execute_order(order, market_data)
+                    
+                    # Update portfolio
+                    proceeds = execution['execution_price'] * execution['quantity'] - execution['commission']
+                    portfolio['cash'] += proceeds
+                    
+                    # Record trade
+                    trade = {
+                        'entry_time': current_position['entry_time'],
+                        'exit_time': timestamp,
+                        'entry_price': current_position['entry_price'],
+                        'exit_price': execution['execution_price'],
+                        'quantity': current_position['quantity'],
+                        'symbol': ticker,
+                        'pnl': (execution['execution_price'] - current_position['entry_price']) * current_position['quantity'] - execution['commission'],
+                        'exit_reason': 'stop_loss'
+                    }
+                    trades.append(trade)
+                    
+                    self.logger.debug(f"Stop loss triggered: {trade}")
+                    
+                    # Clear current position
+                    current_position = None
+                
+                # Check profit target
+                elif market_data['price'] >= current_position['profit_target'] and self.profit_target_manager:
+                    # Create order
+                    order = {
+                        'symbol': ticker,
+                        'qty': current_position['quantity'],
+                        'side': 'sell',
+                        'type': 'market',
+                        'time_in_force': 'day',
+                        'limit_price': None
+                    }
+                    
+                    # Execute order
+                    execution = self.execution_simulator.execute_order(order, market_data)
+                    
+                    # Update portfolio
+                    proceeds = execution['execution_price'] * execution['quantity'] - execution['commission']
+                    portfolio['cash'] += proceeds
+                    
+                    # Record trade
+                    trade = {
+                        'entry_time': current_position['entry_time'],
+                        'exit_time': timestamp,
+                        'entry_price': current_position['entry_price'],
+                        'exit_price': execution['execution_price'],
+                        'quantity': current_position['quantity'],
+                        'symbol': ticker,
+                        'pnl': (execution['execution_price'] - current_position['entry_price']) * current_position['quantity'] - execution['commission'],
+                        'exit_reason': 'profit_target'
+                    }
+                    trades.append(trade)
+                    
+                    self.logger.debug(f"Profit target reached: {trade}")
+                    
+                    # Clear current position
+                    current_position = None
+        
+        # Close any open positions at the end of the backtest
+        if current_position:
+            # Use the last price
+            last_price = data['close'].iloc[-1] if 'close' in data.columns else 0
+            
+            # Record trade
+            trade = {
+                'entry_time': current_position['entry_time'],
+                'exit_time': data.index[-1],
+                'entry_price': current_position['entry_price'],
+                'exit_price': last_price,
+                'quantity': current_position['quantity'],
+                'symbol': ticker,
+                'pnl': (last_price - current_position['entry_price']) * current_position['quantity'],
+                'exit_reason': 'end_of_backtest'
+            }
+            trades.append(trade)
+            
+            self.logger.debug(f"Closed position at end of backtest: {trade}")
+        
+        # Calculate metrics
+        net_profit = sum(trade['pnl'] for trade in trades) if trades else 0
+        win_rate = len([t for t in trades if t['pnl'] > 0]) / len(trades) if trades else 0
+        
+        # Calculate returns
+        initial_equity = self.initial_capital
+        final_equity = portfolio_history[-1]['equity'] if portfolio_history else initial_equity
+        total_return = (final_equity / initial_equity) - 1
+        
+        # Store results
+        results = {
+            'trades': trades,
+            'portfolio_history': portfolio_history,
+            'net_profit': net_profit,
+            'win_rate': win_rate,
+            'total_return': total_return,
+            'initial_equity': initial_equity,
+            'final_equity': final_equity
         }
-
-        return combined_results
+        
+        self.logger.info(f"Backtest completed for {ticker}: {len(trades)} trades, net profit: {net_profit:.2f}, win rate: {win_rate:.2f}")
+        
+        # Store results for later analysis
+        self.results = results
+        
+        return results

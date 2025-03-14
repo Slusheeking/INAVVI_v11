@@ -14,10 +14,10 @@ import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
 
-from autonomous_trading_system.src.config.database_config import (
+from src.config.database_config import (
     get_db_connection_string,
 )
-from autonomous_trading_system.src.data_acquisition.storage.schema_adapter import SchemaAdapter
+# SchemaAdapter import removed
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -73,8 +73,8 @@ class TimescaleStorage:
             df["timestamp"] = pd.to_datetime(df["timestamp"])
 
         try:
-            # Adapt data to match the database schema
-            df_adapted = SchemaAdapter.adapt_stock_aggs(df)
+            # Use the original DataFrame directly
+            df_adapted = df.copy()
             
             # Store data
             logger.debug(f"Storing {len(df_adapted)} stock aggregates")
@@ -180,8 +180,8 @@ class TimescaleStorage:
         if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
             df["timestamp"] = pd.to_datetime(df["timestamp"])
 
-        # Adapt data to match the database schema
-        df_adapted = SchemaAdapter.adapt_quotes(df)
+        # Use the original DataFrame directly
+        df_adapted = df.copy()
 
         try:
             # Store data
@@ -228,8 +228,8 @@ class TimescaleStorage:
         if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
             df["timestamp"] = pd.to_datetime(df["timestamp"])
 
-        # Adapt data to match the database schema
-        df_adapted = SchemaAdapter.adapt_trades(df)
+        # Use the original DataFrame directly
+        df_adapted = df.copy()
 
         try:
             # Store data
@@ -1661,7 +1661,7 @@ class TimescaleStorage:
         """
         try:
             # Import the transformer class
-            from autonomous_trading_system.src.data_acquisition.transformation.data_transformer import DataTransformer
+            from src.data_acquisition.transformation.data_transformer import DataTransformer
             
             # Create an instance
             self.transformer = DataTransformer()

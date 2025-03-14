@@ -8,26 +8,26 @@ IMPORTANT: All Polygon.io API endpoints require specific version prefixes:
 - Reference data (tickers, news): Use v2 or v3 prefix depending on endpoint
 - Market status endpoints: Use v1 prefix (/v1/marketstatus/...)
 """
-
 import time
 import json
 import logging
 import os
+import socket
 import websocket
 import aiohttp
 from datetime import datetime, date, timedelta
 from typing import Any
 import pandas as pd
-
+# Removed unused import: import numpy as np
 import requests
 from requests.exceptions import RequestException, Timeout, ConnectionError
-from autonomous_trading_system.src.utils.api import (
+from src.utils.api import (
     ConnectionPool,
-    RateLimiter, 
+    RateLimiter,
     RetryHandler,
     
 )
-from autonomous_trading_system.src.data_acquisition.api.test_ticker_handler import is_test_ticker, log_test_ticker_skip
+# Production-ready imports only
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ class PolygonClient:
     """Client for interacting with the Polygon.io API."""
 
     def __init__(
-        self, 
+        self,
         api_key: str | None = None,
         base_url: str | None = None,
         websocket_url: str | None = None,
@@ -44,9 +44,22 @@ class PolygonClient:
         retry_attempts: int = 3,
         timeout: int = 30,
         verify_ssl: bool = True,
+        max_position_value: float = 2500.0,  # Maximum $2500 per stock
+        max_daily_value: float = 5000.0,     # Maximum $5000 per day
     ):
         """
-        Initialize the Polygon.io API client.
+        Initialize the Polygon.io API client with dollar-based position limits.
+        
+        Args:
+            api_key: Polygon API key
+            base_url: Base URL for API requests
+            websocket_url: WebSocket URL for real-time data
+            rate_limit: Rate limit in requests per second
+            retry_attempts: Number of retry attempts for failed requests
+            timeout: Request timeout in seconds
+            verify_ssl: Whether to verify SSL certificates
+            max_position_value: Maximum position value per stock in dollars
+            max_daily_value: Maximum total position value per day in dollars
         """
         # Try to get API key from environment if not provided
         self.api_key = api_key
@@ -64,6 +77,23 @@ class PolygonClient:
         # Set URLs
         self.BASE_URL = base_url or "https://api.polygon.io"
         self.WEBSOCKET_URL = websocket_url or "wss://socket.polygon.io/stocks"
+        
+        # Position tracking for dollar-based limits
+        self.max_position_value = max_position_value  # Maximum position value per stock
+        self.max_daily_value = max_daily_value        # Maximum total position value per day
+        self.current_daily_value = 0.0                # Current total position value for the day
+        self.position_values = {}                     # Current position value per ticker
+        self.position_count = 0                       # Number of positions taken today
+        self.last_reset_date = datetime.now().date()  # Last date when limits were reset
+        
+        # Define available WebSocket clusters
+        self.WEBSOCKET_CLUSTERS = {
+            "stocks": "wss://socket.polygon.io/stocks",
+            "forex": "wss://socket.polygon.io/forex",
+            "crypto": "wss://socket.polygon.io/crypto",
+            "options": "wss://socket.polygon.io/options",
+            "delayed_stocks": "wss://delayed.polygon.io/stocks"
+        }
         
         # Initialize rate limiter with configured values
         self.rate_limiter = RateLimiter(
@@ -91,7 +121,7 @@ class PolygonClient:
         
         # Initialize connection pool for WebSocket
         self.ws_pool = ConnectionPool(
-            create_connection=self._create_websocket_connection,
+            create_connection=lambda: self._create_websocket_connection(cluster="stocks", delayed=False),
             close_connection=lambda ws: ws.close() if ws else None,
             name="polygon_ws"
         )
@@ -363,12 +393,6 @@ class PolygonClient:
         Returns:
             DataFrame with aggregate bars
         """
-        # Check if this is a test ticker
-        if ticker and is_test_ticker(ticker):
-            log_test_ticker_skip(ticker, "aggregates collection")
-            # Return empty DataFrame for test tickers
-            return pd.DataFrame()
-            
         # Validate required parameters
         if ticker is None and symbol is None:
             raise ValueError("Either ticker or symbol must be provided")
@@ -480,13 +504,193 @@ class PolygonClient:
 
         return df
 
-    def get_ticker_details(self, ticker: str) -> dict[str, Any]:
-        # Check if this is a test ticker
-        if is_test_ticker(ticker):
-            log_test_ticker_skip(ticker, "ticker details collection")
-            # Return empty dict for test tickers
-            return {}
+    def get_tickers(
+        self,
+        ticker: str | None = None,
+        type: str | None = None,
+        market: str | None = "stocks",
+        exchange: str | None = None,
+        cusip: str | None = None,
+        cik: str | None = None,
+        date: str | None = None,
+        search: str | None = None,
+        active: bool = True,
+        order: str = "asc",
+        limit: int = 100,
+        sort: str = "ticker",
+    ) -> list[dict[str, Any]]:
+        """
+        Get a list of tickers supported by Polygon.io.
+
+        Args:
+            ticker: Filter by ticker symbol
+            type: Filter by type of ticker
+            market: Filter by market type (stocks, crypto, fx, otc, indices)
+            exchange: Filter by exchange in ISO code format
+            cusip: Filter by CUSIP code
+            cik: Filter by CIK number
+            date: Filter by date (YYYY-MM-DD)
+            search: Search for terms within ticker and/or company name
+            active: Whether to return only active tickers
+            order: Order of results (asc, desc)
+            limit: Maximum number of results (max 1000)
+            sort: Field to sort by (ticker, name, market, locale, primary_exchange, type, currency_name)
+
+        Returns:
+            List of ticker information dictionaries
+        """
+        endpoint = "/v3/reference/tickers"
+        params = self._add_api_key({})
+        
+        # Add optional parameters
+        if ticker:
+            params["ticker"] = ticker
+        if type:
+            params["type"] = type
+        if market:
+            params["market"] = market
+        if exchange:
+            params["exchange"] = exchange
+        if cusip:
+            params["cusip"] = cusip
+        if cik:
+            params["cik"] = cik
+        if date:
+            params["date"] = date
+        if search:
+            params["search"] = search
+        
+        # Add boolean parameters
+        params["active"] = str(active).lower()
+        
+        # Add pagination and sorting parameters
+        params["order"] = order
+        params["limit"] = limit
+        params["sort"] = sort
+        
+        # Make the request
+        result = self._make_request(endpoint, params)
+        
+        # Return the results
+        return result.get("results", [])
+        
+    def get_all_tickers(
+        self,
+        ticker: str | None = None,
+        type: str | None = None,
+        market: str | None = "stocks",
+        exchange: str | None = None,
+        cusip: str | None = None,
+        cik: str | None = None,
+        date: str | None = None,
+        search: str | None = None,
+        active: bool = True,
+        order: str = "asc",
+        sort: str = "ticker",
+        max_tickers: int = 5000,
+    ) -> list[dict[str, Any]]:
+        """
+        Get a complete list of tickers supported by Polygon.io, handling pagination.
+
+        This method will make multiple API calls if necessary to fetch all tickers
+        up to the specified max_tickers limit.
+
+        Args:
+            ticker: Filter by ticker symbol
+            type: Filter by type of ticker
+            market: Filter by market type (stocks, crypto, fx, otc, indices)
+            exchange: Filter by exchange in ISO code format
+            cusip: Filter by CUSIP code
+            cik: Filter by CIK number
+            date: Filter by date (YYYY-MM-DD)
+            search: Search for terms within ticker and/or company name
+            active: Whether to return only active tickers
+            order: Order of results (asc, desc)
+            sort: Field to sort by (ticker, name, market, locale, primary_exchange, type, currency_name)
+            max_tickers: Maximum number of tickers to return (default 5000)
+
+        Returns:
+            List of ticker information dictionaries
+        """
+        all_tickers = []
+        page_limit = min(1000, max_tickers)  # API max is 1000 per request
+        
+        # Initial request
+        endpoint = "/v3/reference/tickers"
+        params = self._add_api_key({})
+        
+        # Add optional parameters
+        if ticker:
+            params["ticker"] = ticker
+        if type:
+            params["type"] = type
+        if market:
+            params["market"] = market
+        if exchange:
+            params["exchange"] = exchange
+        if cusip:
+            params["cusip"] = cusip
+        if cik:
+            params["cik"] = cik
+        if date:
+            params["date"] = date
+        if search:
+            params["search"] = search
+        
+        # Add boolean parameters
+        params["active"] = str(active).lower()
+        
+        # Add pagination and sorting parameters
+        params["order"] = order
+        params["limit"] = page_limit
+        params["sort"] = sort
+        
+        # Make the initial request
+        result = self._make_request(endpoint, params)
+        
+        # Add results to our list
+        tickers = result.get("results", [])
+        all_tickers.extend(tickers)
+        
+        # Check if we need to paginate
+        next_url = result.get("next_url")
+        
+        # Continue fetching pages until we have enough tickers or there are no more pages
+        while next_url and len(all_tickers) < max_tickers:
+            # Extract the cursor from the next_url
+            import urllib.parse
+            parsed_url = urllib.parse.urlparse(next_url)
+            query_params = urllib.parse.parse_qs(parsed_url.query)
             
+            # Update our params with the cursor
+            if "cursor" in query_params:
+                params["cursor"] = query_params["cursor"][0]
+            
+            # Make the next request
+            result = self._make_request(endpoint, params)
+            
+            # Add results to our list
+            tickers = result.get("results", [])
+            all_tickers.extend(tickers)
+            
+            # Update next_url for the next iteration
+            next_url = result.get("next_url")
+            
+            # Log progress
+            logger.info(f"Fetched {len(all_tickers)} tickers so far")
+            
+            # Check if we've reached the limit
+            if len(all_tickers) >= max_tickers:
+                logger.info(f"Reached maximum ticker limit of {max_tickers}")
+                break
+        
+        # Trim to max_tickers if we went over
+        if len(all_tickers) > max_tickers:
+            all_tickers = all_tickers[:max_tickers]
+        
+        return all_tickers
+        
+    def get_ticker_details(self, ticker: str) -> dict[str, Any]:
         """
         Get detailed information about a ticker.
 
@@ -500,16 +704,162 @@ class PolygonClient:
         result = self._make_request(endpoint, self._add_api_key({}))
 
         return result.get("results", {})
+        
+    def get_tickers_df(
+        self,
+        ticker: str | None = None,
+        type: str | None = None,
+        market: str | None = "stocks",
+        exchange: str | None = None,
+        cusip: str | None = None,
+        cik: str | None = None,
+        date: str | None = None,
+        search: str | None = None,
+        active: bool = True,
+        order: str = "asc",
+        limit: int = 100,
+        sort: str = "ticker",
+    ) -> pd.DataFrame:
+        """
+        Get a list of tickers as a pandas DataFrame.
+
+        Args:
+            ticker: Filter by ticker symbol
+            type: Filter by type of ticker
+            market: Filter by market type (stocks, crypto, fx, otc, indices)
+            exchange: Filter by exchange in ISO code format
+            cusip: Filter by CUSIP code
+            cik: Filter by CIK number
+            date: Filter by date (YYYY-MM-DD)
+            search: Search for terms within ticker and/or company name
+            active: Whether to return only active tickers
+            order: Order of results (asc, desc)
+            limit: Maximum number of results (max 1000)
+            sort: Field to sort by (ticker, name, market, locale, primary_exchange, type, currency_name)
+
+        Returns:
+            DataFrame with ticker information
+        """
+        # Get tickers as a list of dictionaries
+        tickers = self.get_tickers(
+            ticker=ticker,
+            type=type,
+            market=market,
+            exchange=exchange,
+            cusip=cusip,
+            cik=cik,
+            date=date,
+            search=search,
+            active=active,
+            order=order,
+            limit=limit,
+            sort=sort,
+        )
+        
+        # Convert to DataFrame
+        if not tickers:
+            # Return empty DataFrame with expected columns
+            return pd.DataFrame(columns=[
+                "ticker", "name", "market", "locale", "primary_exchange",
+                "type", "active", "currency_name", "last_updated_utc"
+            ])
+        
+        try:
+            df = pd.DataFrame(tickers)
+            
+            # Convert date columns to datetime
+            if "last_updated_utc" in df.columns:
+                df["last_updated_utc"] = pd.to_datetime(df["last_updated_utc"])
+                
+            if "delisted_utc" in df.columns:
+                df["delisted_utc"] = pd.to_datetime(df["delisted_utc"])
+                
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error converting tickers to DataFrame: {e}")
+            # Return empty DataFrame
+            return pd.DataFrame()
+            
+    def get_all_tickers_df(
+        self,
+        ticker: str | None = None,
+        type: str | None = None,
+        market: str | None = "stocks",
+        exchange: str | None = None,
+        cusip: str | None = None,
+        cik: str | None = None,
+        date: str | None = None,
+        search: str | None = None,
+        active: bool = True,
+        order: str = "asc",
+        sort: str = "ticker",
+        max_tickers: int = 5000,
+    ) -> pd.DataFrame:
+        """
+        Get a complete list of tickers as a pandas DataFrame, handling pagination.
+
+        Args:
+            ticker: Filter by ticker symbol
+            type: Filter by type of ticker
+            market: Filter by market type (stocks, crypto, fx, otc, indices)
+            exchange: Filter by exchange in ISO code format
+            cusip: Filter by CUSIP code
+            cik: Filter by CIK number
+            date: Filter by date (YYYY-MM-DD)
+            search: Search for terms within ticker and/or company name
+            active: Whether to return only active tickers
+            order: Order of results (asc, desc)
+            sort: Field to sort by (ticker, name, market, locale, primary_exchange, type, currency_name)
+            max_tickers: Maximum number of tickers to return (default 5000)
+
+        Returns:
+            DataFrame with ticker information
+        """
+        # Get tickers as a list of dictionaries
+        tickers = self.get_all_tickers(
+            ticker=ticker,
+            type=type,
+            market=market,
+            exchange=exchange,
+            cusip=cusip,
+            cik=cik,
+            date=date,
+            search=search,
+            active=active,
+            order=order,
+            sort=sort,
+            max_tickers=max_tickers,
+        )
+        
+        # Convert to DataFrame
+        if not tickers:
+            # Return empty DataFrame with expected columns
+            return pd.DataFrame(columns=[
+                "ticker", "name", "market", "locale", "primary_exchange",
+                "type", "active", "currency_name", "last_updated_utc"
+            ])
+        
+        try:
+            df = pd.DataFrame(tickers)
+            
+            # Convert date columns to datetime
+            if "last_updated_utc" in df.columns:
+                df["last_updated_utc"] = pd.to_datetime(df["last_updated_utc"])
+                
+            if "delisted_utc" in df.columns:
+                df["delisted_utc"] = pd.to_datetime(df["delisted_utc"])
+                
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error converting tickers to DataFrame: {e}")
+            # Return empty DataFrame
+            return pd.DataFrame()
 
     def get_quotes(
         self, ticker: str, date: str | datetime, limit: int = 50000
     ) -> pd.DataFrame:
-        # Check if this is a test ticker
-        if is_test_ticker(ticker):
-            log_test_ticker_skip(ticker, "quotes collection")
-            # Return empty DataFrame for test tickers
-            return pd.DataFrame()
-            
         """
         Get NBBO quotes for a ticker on a specific date.
 
@@ -593,22 +943,9 @@ class PolygonClient:
 
         return df
 
-
-        # Add additional columns
-        df["symbol"] = ticker
-        df["source"] = "polygon"
-
-        return df
-
     def get_trades(
         self, ticker: str, date: str | datetime, limit: int = 50000
     ) -> pd.DataFrame:
-        # Check if this is a test ticker
-        if is_test_ticker(ticker):
-            log_test_ticker_skip(ticker, "trades collection")
-            # Return empty DataFrame for test tickers
-            return pd.DataFrame()
-            
         """
         Get trades for a ticker on a specific date.
 
@@ -679,13 +1016,6 @@ class PolygonClient:
             logger.warning("No timestamp column found in trades response")
             # Add a placeholder timestamp
             df["timestamp"] = pd.to_datetime("now")
-
-        # Add additional columns
-        df["symbol"] = ticker
-        df["source"] = "polygon"
-
-        return df
-
 
         # Add additional columns
         df["symbol"] = ticker
@@ -796,12 +1126,6 @@ class PolygonClient:
         strike_price: float | None = None,
         contract_type: str | None = None,  # 'call' or 'put'
     ) -> list[dict[str, Any]]:
-        # Check if this is a test ticker
-        if is_test_ticker(underlying):
-            log_test_ticker_skip(underlying, "options chain collection")
-            # Return empty list for test tickers
-            return []
-            
         """
         Get options chain for an underlying asset.
 
@@ -1019,15 +1343,32 @@ class PolygonClient:
         return calendar
 
     # Helper method for connection pool
-    def _create_websocket_connection(self):
-        """Create a new WebSocket connection."""
+    def _create_websocket_connection(self, cluster: str = "stocks", delayed: bool = False):
+        """
+        Create a new WebSocket connection.
+        
+        Args:
+            cluster: WebSocket cluster ('stocks', 'forex', 'crypto', 'options')
+            delayed: Whether to use the delayed data feed (15-minute delay, free tier)
+        """
         try:
+            # Determine the correct cluster URL
+            if delayed and cluster == "stocks":
+                websocket_url = self.WEBSOCKET_CLUSTERS["delayed_stocks"]
+                cluster_name = "delayed_stocks"
+            elif cluster in self.WEBSOCKET_CLUSTERS:
+                websocket_url = self.WEBSOCKET_CLUSTERS[cluster]
+                cluster_name = cluster
+            else:
+                valid_clusters = list(self.WEBSOCKET_CLUSTERS.keys())
+                raise ValueError(f"Invalid cluster: {cluster}. Valid clusters are: {valid_clusters}")
+            
             # Create websocket with timeout
             ws = websocket.WebSocket()
             ws.settimeout(10)  # 10 seconds timeout for operations
-            logger.info(f"Connecting to WebSocket at {self.WEBSOCKET_URL}...")
-            ws.connect(self.WEBSOCKET_URL)
-            logger.info("Connected to WebSocket")
+            logger.info(f"Connecting to WebSocket at {websocket_url}...")
+            ws.connect(websocket_url)
+            logger.info(f"Connected to WebSocket for {cluster_name} cluster")
             
             # Authenticate with timeout
             logger.info("Authenticating with Polygon API...")
@@ -1068,15 +1409,30 @@ class PolygonClient:
             raise
 
     # WebSocket methods with retry handling
-    def connect_websocket(self, cluster: str = "stocks") -> None:
+    def connect_websocket(self, cluster: str = "stocks", delayed: bool = False,
+                         buffer_size: int = 16384, reconnect_attempts: int = 5,
+                         high_throughput: bool = True, use_compression: bool = True) -> None:
         """
-        Connect to Polygon WebSocket.
+        Connect to Polygon WebSocket with optimizations for high-frequency trading.
 
         Args:
             cluster: WebSocket cluster ('stocks', 'forex', 'crypto', 'options')
+            delayed: Whether to use the delayed data feed (15-minute delay, free tier)
+            buffer_size: WebSocket buffer size for high-throughput data (increased for HFT)
+            reconnect_attempts: Number of reconnection attempts before failing
+            high_throughput: Enable optimizations for high-throughput trading (5000+ positions/day)
+            use_compression: Whether to use WebSocket compression for reduced bandwidth
         """
-        if cluster not in ["stocks", "forex", "crypto", "options"]:
-            raise ValueError(f"Invalid cluster: {cluster}")
+        # Determine the correct cluster
+        if delayed and cluster == "stocks":
+            websocket_url = self.WEBSOCKET_CLUSTERS["delayed_stocks"]
+            cluster_name = "delayed_stocks"
+        elif cluster in self.WEBSOCKET_CLUSTERS:
+            websocket_url = self.WEBSOCKET_CLUSTERS[cluster]
+            cluster_name = cluster
+        else:
+            valid_clusters = list(self.WEBSOCKET_CLUSTERS.keys())
+            raise ValueError(f"Invalid cluster: {cluster}. Valid clusters are: {valid_clusters}")
 
         # Close existing connection if any
         if self.ws:
@@ -1088,14 +1444,46 @@ class PolygonClient:
 
         def on_message(ws, message):
             try:
+                # Use faster JSON parsing for high-throughput
                 data = json.loads(message)
-                for msg in data:
-                    msg_type = msg.get("ev")
+                
+                # Only log status messages at info level
+                if isinstance(data, list) and len(data) > 0:
+                    first_msg = data[0]
+                    if first_msg.get("ev") == "status":
+                        logger.info(f"WebSocket status: {first_msg.get('status')} - {first_msg.get('message')}")
+                
+                # Batch process messages by type for efficiency
+                if isinstance(data, list) and len(data) > 0:
+                    # Group messages by event type for batch processing
+                    message_groups = {}
+                    for msg in data:
+                        msg_type = msg.get("ev")
+                        if msg_type:
+                            if msg_type not in message_groups:
+                                message_groups[msg_type] = []
+                            message_groups[msg_type].append(msg)
+                    
+                    # Process each group of messages
+                    for msg_type, msgs in message_groups.items():
+                        if msg_type in self.ws_callbacks:
+                            for callback in self.ws_callbacks[msg_type]:
+                                # Pass the entire batch to the callback if it supports it
+                                if getattr(callback, 'supports_batch', False):
+                                    callback(msgs)
+                                else:
+                                    # Otherwise process individually
+                                    for msg in msgs:
+                                        callback(msg)
+                else:
+                    # Handle single message case
+                    msg_type = data.get("ev")
                     if msg_type in self.ws_callbacks:
                         for callback in self.ws_callbacks[msg_type]:
-                            callback(msg)
+                            callback(data)
             except Exception as e:
                 logger.error(f"Error processing WebSocket message: {e}")
+                # Don't let errors in message processing break the connection
 
         def on_error(ws, error):
             logger.error(f"WebSocket error: {error}")
@@ -1104,7 +1492,7 @@ class PolygonClient:
             logger.info(f"WebSocket connection closed: {close_status_code} - {close_msg}")
 
         def on_open(ws):
-            logger.info(f"WebSocket connection opened to {cluster} cluster")
+            logger.info(f"WebSocket connection opened to {cluster_name} cluster")
             # Authenticate with robust error handling
             try:
                 auth_message = json.dumps({"action": "auth", "params": self.api_key})
@@ -1114,18 +1502,63 @@ class PolygonClient:
                 logger.error(f"Error during authentication: {e}")
                 ws.close()
 
-        # Create new connection with timeout
+        # Create new connection with optimized settings for high-frequency trading
+        logger.info(f"Connecting to Polygon WebSocket at {websocket_url} with high-throughput optimizations")
+        
+        # Create WebSocketApp with optimized settings for high-frequency trading
         self.ws = websocket.WebSocketApp(
-            self.WEBSOCKET_URL,
+            websocket_url,
             on_message=on_message,
             on_error=on_error,
             on_close=on_close,
             on_open=on_open,
         )
-
-        # Start the connection immediately in a background thread
-        self.start_websocket(threaded=True)
-        time.sleep(2)  # Give the connection time to establish and authenticate
+        
+        # Set WebSocket options for high-throughput
+        if high_throughput:
+            # Increase buffer sizes for high message throughput
+            websocket.enableTrace(False)  # Disable tracing for performance
+            
+            # Use binary frames for efficiency
+            self.ws.sock_opt = (
+                (websocket.ABNF.OPCODE_BINARY, 1),  # Use binary frames for efficiency
+                (websocket.ABNF.OPCODE_TEXT, 0)     # Disable text frames
+            )
+            
+            # Enable compression if requested (reduces bandwidth at cost of slight CPU overhead)
+            if use_compression:
+                self.ws.enable_multithread = True  # Required for compression
+                self.ws.get_mask_key = lambda: os.urandom(4)  # More secure mask key generation
+                
+            # Set larger buffer size for receiving data (16KB default, increased for HFT)
+            if hasattr(self.ws, 'sock') and self.ws.sock:
+                self.ws.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, buffer_size)
+                self.ws.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, buffer_size)
+                # Set TCP_NODELAY for lower latency (disables Nagle's algorithm)
+                self.ws.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        
+        # Configure reconnection strategy
+        self.reconnect_attempts = reconnect_attempts
+        self.current_reconnect_attempt = 0
+        self.reconnect_delay = 1.0  # Start with 1 second delay, will increase exponentially
+        
+        # Start the connection immediately in a background thread with optimized parameters
+        self.start_websocket(threaded=True, ping_timeout=20)  # Increased timeout for stability
+        
+        # Wait for connection with timeout and verification
+        max_wait_time = 5  # Maximum time to wait for connection in seconds
+        wait_interval = 0.1  # Check interval
+        total_waited = 0
+        
+        while total_waited < max_wait_time:
+            if hasattr(self.ws, 'sock') and self.ws.sock and self.ws.sock.connected:
+                logger.info("WebSocket connection established successfully")
+                break
+            time.sleep(wait_interval)
+            total_waited += wait_interval
+            
+        if not (hasattr(self.ws, 'sock') and self.ws.sock and self.ws.sock.connected):
+            logger.warning("WebSocket connection may not be fully established yet")
 
     @RetryHandler.decorator
     def subscribe_websocket(self, channels: list[str]) -> None:
@@ -1172,10 +1605,97 @@ class PolygonClient:
         if event_type not in self.ws_callbacks:
             self.ws_callbacks[event_type] = []
         self.ws_callbacks[event_type].append(callback)
+        
+    def get_websocket_channels_info(self) -> dict[str, str]:
+        """
+        Get information about available WebSocket channels.
+        
+        Returns:
+            Dictionary mapping channel prefixes to descriptions
+        """
+        return {
+            "T": "Trades - Real-time trade data (e.g., 'T.AAPL' for Apple trades)",
+            "Q": "Quotes - Real-time NBBO quotes (e.g., 'Q.AAPL' for Apple quotes)",
+            "AM": "Minute Aggregates - Per-minute OHLCV bars (e.g., 'AM.AAPL' for Apple minute bars)",
+            "A": "Second Aggregates - Per-second OHLCV bars (e.g., 'A.AAPL' for Apple second bars)",
+            "XQ": "Extended Quotes - Extended quote data (e.g., 'XQ.AAPL' for Apple extended quotes)",
+            "XT": "Extended Trades - Extended trade data (e.g., 'XT.AAPL' for Apple extended trades)",
+            "status": "Status messages from the WebSocket server"
+        }
+        
+    def get_websocket_subscription_examples(self) -> list[dict[str, Any]]:
+        """
+        Get examples of WebSocket channel subscriptions.
+        
+        Returns:
+            List of example subscription configurations
+        """
+        return [
+            {
+                "description": "Subscribe to trades for a single stock",
+                "channels": ["T.AAPL"],
+                "code_example": """
+# Subscribe to Apple trades
+polygon_client.connect_websocket(cluster="stocks")
+polygon_client.subscribe_websocket(channels=["T.AAPL"])
+
+# Add callback for trade events
+def on_trade(trade):
+    print(f"Trade: {trade['sym']} - Price: {trade['p']} - Size: {trade['s']}")
+    
+polygon_client.add_websocket_callback("T", on_trade)
+"""
+            },
+            {
+                "description": "Subscribe to quotes for multiple stocks",
+                "channels": ["Q.AAPL", "Q.MSFT", "Q.AMZN"],
+                "code_example": """
+# Subscribe to quotes for multiple stocks
+polygon_client.connect_websocket(cluster="stocks")
+polygon_client.subscribe_websocket(channels=["Q.AAPL", "Q.MSFT", "Q.AMZN"])
+
+# Add callback for quote events
+def on_quote(quote):
+    print(f"Quote: {quote['sym']} - Bid: {quote['bp']} - Ask: {quote['ap']}")
+    
+polygon_client.add_websocket_callback("Q", on_quote)
+"""
+            },
+            {
+                "description": "Subscribe to minute aggregates (bars)",
+                "channels": ["AM.AAPL"],
+                "code_example": """
+# Subscribe to minute bars for Apple
+polygon_client.connect_websocket(cluster="stocks")
+polygon_client.subscribe_websocket(channels=["AM.AAPL"])
+
+# Add callback for aggregate minute events
+def on_minute_bar(bar):
+    print(f"Bar: {bar['sym']} - Open: {bar['o']} - High: {bar['h']} - Low: {bar['l']} - Close: {bar['c']} - Volume: {bar['v']}")
+    
+polygon_client.add_websocket_callback("AM", on_minute_bar)
+"""
+            },
+            {
+                "description": "Subscribe to crypto trades",
+                "channels": ["XT.BTC-USD"],
+                "code_example": """
+# Subscribe to Bitcoin-USD trades
+polygon_client.connect_websocket(cluster="crypto")
+polygon_client.subscribe_websocket(channels=["XT.BTC-USD"])
+
+# Add callback for crypto trade events
+def on_crypto_trade(trade):
+    print(f"Crypto Trade: {trade['pair']} - Price: {trade['p']} - Size: {trade['s']}")
+    
+polygon_client.add_websocket_callback("XT", on_crypto_trade)
+"""
+            }
+        ]
 
     def start_websocket(self, threaded: bool = True, ping_timeout: int = 10) -> None:
         """
-        Start WebSocket connection.
+        Start WebSocket connection with optimizations for high-frequency trading.
 
         Args:
             threaded: Whether to run in a separate thread
@@ -1184,22 +1704,52 @@ class PolygonClient:
         if not self.ws:
             raise ValueError("WebSocket not connected. Call connect_websocket first.")
 
-        # Set up run parameters
+        # Set up run parameters optimized for high-frequency trading
         kwargs = {
             "ping_timeout": ping_timeout,
-            "ping_interval": 30,  # Send ping every 30 seconds
+            "ping_interval": 15,  # More frequent pings for connection stability
             "ping_payload": "",   # Empty string as ping message
+            "skip_utf8_validation": True,  # Skip UTF-8 validation for performance
         }
+
+        # Define reconnection handler
+        def run_with_reconnect():
+            while self.current_reconnect_attempt < self.reconnect_attempts:
+                try:
+                    logger.info(f"Starting WebSocket connection (attempt {self.current_reconnect_attempt + 1}/{self.reconnect_attempts})")
+                    self.ws.run_forever(**kwargs)
+                    
+                    # If we get here, the connection was closed normally
+                    if not getattr(self.ws, 'keep_running', False):
+                        logger.info("WebSocket connection closed normally")
+                        break
+                        
+                    # Otherwise, attempt to reconnect
+                    logger.warning("WebSocket connection lost, attempting to reconnect...")
+                    self.current_reconnect_attempt += 1
+                    
+                    # Exponential backoff for reconnection
+                    reconnect_wait = min(60, self.reconnect_delay * (2 ** self.current_reconnect_attempt))
+                    logger.info(f"Waiting {reconnect_wait:.2f}s before reconnecting...")
+                    time.sleep(reconnect_wait)
+                    
+                except Exception as e:
+                    logger.error(f"Error in WebSocket connection: {e}")
+                    self.current_reconnect_attempt += 1
+                    time.sleep(self.reconnect_delay)
+            
+            if self.current_reconnect_attempt >= self.reconnect_attempts:
+                logger.error(f"Failed to maintain WebSocket connection after {self.reconnect_attempts} attempts")
 
         if threaded:
             import threading
-            wst = threading.Thread(target=self.ws.run_forever, kwargs=kwargs)
+            wst = threading.Thread(target=run_with_reconnect)
             wst.daemon = True
             wst.start()
-            logger.info("WebSocket started in background thread")
+            logger.info("WebSocket started in background thread with reconnection handling")
         else:
-            logger.info("Starting WebSocket in main thread")
-            self.ws.run_forever(**kwargs)
+            logger.info("Starting WebSocket in main thread with reconnection handling")
+            run_with_reconnect()
 
     def close_websocket(self) -> None:
         """Close WebSocket connection."""
@@ -1233,6 +1783,76 @@ class PolygonClient:
         except Exception as e:
             logger.warning(f"Error closing HTTP session: {e}")
         
+    def can_take_position(self, ticker: str, value: float) -> bool:
+        """
+        Check if a position can be taken based on dollar-based limits.
+        
+        Args:
+            ticker: Ticker symbol
+            value: Position value in dollars
+            
+        Returns:
+            bool: Whether the position can be taken
+        """
+        # Reset daily tracking if it's a new day
+        current_date = datetime.now().date()
+        if current_date > self.last_reset_date:
+            logger.info(f"Resetting daily position tracking (new day: {current_date})")
+            self.current_daily_value = 0.0
+            self.position_values = {}
+            self.position_count = 0
+            self.last_reset_date = current_date
+        
+        # Check if adding this position would exceed the daily limit
+        if self.current_daily_value + value > self.max_daily_value:
+            logger.warning(f"Position for {ticker} (${value:.2f}) would exceed daily limit of ${self.max_daily_value:.2f} (current: ${self.current_daily_value:.2f})")
+            return False
+        
+        # Check if adding this position would exceed the per-stock limit
+        current_ticker_value = self.position_values.get(ticker, 0.0)
+        if current_ticker_value + value > self.max_position_value:
+            logger.warning(f"Position for {ticker} (${value:.2f}) would exceed per-stock limit of ${self.max_position_value:.2f} (current: ${current_ticker_value:.2f})")
+            return False
+        
+        return True
+    
+    def update_position_tracking(self, ticker: str, value: float) -> None:
+        """
+        Update position tracking after taking a position.
+        
+        Args:
+            ticker: Ticker symbol
+            value: Position value in dollars
+        """
+        # Update daily tracking
+        self.current_daily_value += value
+        
+        # Update per-stock tracking
+        current_ticker_value = self.position_values.get(ticker, 0.0)
+        self.position_values[ticker] = current_ticker_value + value
+        
+        # Update position count
+        self.position_count += 1
+        
+        logger.info(f"Position taken for {ticker}: ${value:.2f} (daily total: ${self.current_daily_value:.2f}/{self.max_daily_value:.2f}, ticker total: ${self.position_values[ticker]:.2f}/{self.max_position_value:.2f})")
+    
+    def get_position_limits(self) -> dict[str, float]:
+        """
+        Get current position limits and usage.
+        
+        Returns:
+            dict: Dictionary with position limit information
+        """
+        return {
+            "max_daily_value": self.max_daily_value,
+            "current_daily_value": self.current_daily_value,
+            "daily_remaining": max(0.0, self.max_daily_value - self.current_daily_value),
+            "max_position_value": self.max_position_value,
+            "position_values": self.position_values,
+            "position_count": self.position_count,
+            "last_reset_date": self.last_reset_date.isoformat()
+        }
+    
     def close(self) -> None:
         """
         Close all connections and release resources.
@@ -1241,3 +1861,68 @@ class PolygonClient:
         """
         self.close_websocket()
         logger.info("PolygonClient resources released")
+        
+    def get_websocket_example_script(self) -> str:
+        """
+        Get a complete example script for using the Polygon WebSocket API.
+        
+        Returns:
+            String containing a Python script example
+        """
+        return """
+import os
+import time
+import json
+from src.data_acquisition.api.polygon_client import PolygonClient
+
+# Initialize the client with your API key
+api_key = os.environ.get("POLYGON_API_KEY")  # Or provide directly: api_key = "YOUR_API_KEY"
+polygon = PolygonClient(api_key=api_key)
+
+# Define callback functions for different event types
+def on_trade(trade):
+    print(f"Trade: {trade['sym']} - Price: {trade['p']} - Size: {trade['s']} - Time: {trade['t']}")
+
+def on_quote(quote):
+    print(f"Quote: {quote['sym']} - Bid: {quote['bp']} - Ask: {quote['ap']} - Time: {quote['t']}")
+
+def on_agg_minute(agg):
+    print(f"Minute Bar: {agg['sym']} - Open: {agg['o']} - High: {agg['h']} - Low: {agg['l']} - Close: {agg['c']} - Volume: {agg['v']}")
+
+def on_status(status):
+    print(f"Status: {status['status']} - Message: {status.get('message', '')}")
+
+# Register callbacks
+polygon.add_websocket_callback("T", on_trade)    # Trades
+polygon.add_websocket_callback("Q", on_quote)    # Quotes
+polygon.add_websocket_callback("AM", on_agg_minute)  # Minute aggregates
+polygon.add_websocket_callback("status", on_status)  # Status messages
+
+# Connect to the WebSocket (use delayed=True for free tier with 15-min delay)
+polygon.connect_websocket(cluster="stocks", delayed=False)
+
+# Subscribe to channels
+channels = [
+    "T.AAPL",   # Apple trades
+    "Q.AAPL",   # Apple quotes
+    "AM.AAPL",  # Apple minute bars
+    "T.MSFT",   # Microsoft trades
+    "Q.MSFT",   # Microsoft quotes
+    "AM.MSFT"   # Microsoft minute bars
+]
+
+# Subscribe to the channels
+polygon.subscribe_websocket(channels)
+
+try:
+    print("WebSocket connected and subscribed. Press Ctrl+C to exit.")
+    # Keep the script running
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print("Closing connection...")
+finally:
+    # Clean up
+    polygon.close_websocket()
+    print("Connection closed")
+"""
