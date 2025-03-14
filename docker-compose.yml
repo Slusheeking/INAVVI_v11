@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # Core system services
+  system-controller:
+    build:
+      context: .
+      dockerfile: docker/system_controller/Dockerfile
+    image: autonomous_trading_system/system-controller:${VERSION}
+    environment:
+      # Connect to existing TimescaleDB container
+      - TIMESCALEDB_HOST=${TIMESCALEDB_HOST}
+      - TIMESCALEDB_PORT=${TIMESCALEDB_PORT}
+      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
+      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
+      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL}
+    volumes:
+      - logs:/app/logs
+      - ./config:/app/config
+    restart: unless-stopped
+    networks:
+      - default
+    external_links:
+      - timescaledb-v1-1
+      - model-training-tensorflow-v1-1
+      - feature-engineering-tensorflow-v1-1
+
+  data-acquisition:
+    build:
+      context: .
+      dockerfile: docker/data_acquisition/Dockerfile
+    image: autonomous_trading_system/data-acquisition:${VERSION}
+    depends_on:
+      - system-controller
+    environment:
+      # Connect to existing TimescaleDB container
+      - TIMESCALEDB_HOST=${TIMESCALEDB_HOST}
+      - TIMESCALEDB_PORT=${TIMESCALEDB_PORT}
+      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
+      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
+      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - UNUSUAL_WHALES_API_KEY=${UNUSUAL_WHALES_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL}
+    volumes:
+      - logs:/app/logs
+      - ./config:/app/config
+      - data:/app/data
+    restart: unless-stopped
+    networks:
+      - default
+    external_links:
+      - timescaledb-v1-1
+      - feature-engineering-tensorflow-v1-1
+
+  trading-strategy:
+    build:
+      context: .
+      dockerfile: docker/trading_strategy/Dockerfile
+    image: autonomous_trading_system/trading-strategy:${VERSION}
+    depends_on:
+      - system-controller
+      - data-acquisition
+    environment:
+      # Connect to existing TimescaleDB container
+      - TIMESCALEDB_HOST=${TIMESCALEDB_HOST}
+      - TIMESCALEDB_PORT=${TIMESCALEDB_PORT}
+      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
+      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
+      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - ALPACA_API_BASE_URL=${ALPACA_API_BASE_URL}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - MAX_POSITION_SIZE=${MAX_POSITION_SIZE}
+      - RISK_PERCENTAGE=${RISK_PERCENTAGE}
+      - MAX_POSITIONS=${MAX_POSITIONS}
+    volumes:
+      - logs:/app/logs
+      - ./config:/app/config
+    restart: unless-stopped
+    networks:
+      - default
+    external_links:
+      - timescaledb-v1-1
+      - model-training-tensorflow-v1-1
+
+volumes:
+  logs:
+  data:
