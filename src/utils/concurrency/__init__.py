@@ -6,7 +6,7 @@ This module provides utilities for concurrent processing.
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, List, TypeVar, Generic
+from typing import Any, Callable, List, TypeVar
 
 logger = logging.getLogger(__name__)
 

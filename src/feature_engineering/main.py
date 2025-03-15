@@ -9,20 +9,16 @@ import os
 import time
 import signal
 import threading
-import logging
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from datetime import datetime
+from typing import List, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-import pandas as pd
-import numpy as np
 
 from src.utils.logging import configure_logger
 from src.utils.config import load_config
 from src.feature_engineering.pipeline.feature_pipeline import FeaturePipeline
-from src.feature_engineering.store.feature_store import feature_store
 from src.utils.database import get_db_manager
 
 # Configure logging

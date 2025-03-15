@@ -9,7 +9,6 @@ import logging
 from typing import Dict, Any, Optional
 
 import pandas as pd
-import sqlalchemy
 from sqlalchemy import create_engine, text
 
 logger = logging.getLogger(__name__)

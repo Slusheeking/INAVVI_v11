@@ -9,9 +9,8 @@ import os
 import time
 import signal
 import threading
-import logging
-from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from datetime import datetime
+from typing import List
 
 import uvicorn
 from fastapi import FastAPI, HTTPException

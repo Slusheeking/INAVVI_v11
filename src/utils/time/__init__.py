@@ -22,9 +22,8 @@ from src.utils.time.market_hours import (
     is_market_open,
     get_next_market_open,
     get_next_market_close,
-    get_trading_days,
-    get_trading_sessions,
     get_market_status,
+    get_trading_sessions,
     MarketHours,
     MarketStatus,
     MarketSession,
@@ -69,8 +68,10 @@ __all__ = [
     # market_hours
     "MarketHours",
     "MarketStatus",
+    "MarketSession",
     "get_market_hours",
     "get_market_status",
+    "get_trading_sessions",
     
     # market_calendar
     "get_trading_days",
