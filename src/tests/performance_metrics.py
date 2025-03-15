@@ -6,7 +6,7 @@ tracking API response times, data processing times, model training and inference
 trade execution times, model accuracy, data quality, and system latency.
 """
 
-import logging
+from src.utils.logging import get_logger
 
 class PerformanceMetrics:
     """Collects and reports performance metrics for the trading system."""
@@ -22,7 +22,10 @@ class PerformanceMetrics:
             "data_quality": {},
             "system_latency": {}
         }
-        self.logger = logging.getLogger("performance_metrics")
+        
+        # Set up logger for this module
+        self.logger = get_logger("tests.performance_metrics")
+        self.logger.info("Performance metrics logger initialized")
         
     def record_api_response_time(self, api_name, endpoint, response_time):
         """Record API response time."""

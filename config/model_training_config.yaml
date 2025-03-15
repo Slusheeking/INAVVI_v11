@@ -1,0 +1,107 @@
+# Model Training Configuration
+
+# General settings
+general:
+  random_seed: 42
+  validation_split: 0.2
+  test_split: 0.1
+  shuffle_data: true
+  early_stopping: true
+  early_stopping_patience: 10
+  save_best_only: true
+  model_registry_path: /app/models/registry
+  checkpoint_path: /app/models/checkpoints
+
+# Hardware settings
+hardware:
+  use_gpu: true
+  mixed_precision: true
+  xla_acceleration: true
+  gpu_memory_growth: true
+  num_parallel_calls: 8
+  prefetch_buffer_size: 4
+
+# LSTM model settings
+lstm:
+  batch_size: 64
+  epochs: 100
+  learning_rate: 0.001
+  optimizer: adam
+  loss: mean_squared_error
+  metrics:
+    - mean_absolute_error
+    - mean_squared_error
+  architecture:
+    input_sequence_length: 60
+    layers:
+      - type: lstm
+        units: 128
+        return_sequences: true
+        dropout: 0.2
+      - type: lstm
+        units: 64
+        return_sequences: false
+        dropout: 0.2
+      - type: dense
+        units: 32
+        activation: relu
+      - type: dense
+        units: 1
+        activation: linear
+
+# CNN model settings
+cnn:
+  batch_size: 64
+  epochs: 100
+  learning_rate: 0.001
+  optimizer: adam
+  loss: mean_squared_error
+  metrics:
+    - mean_absolute_error
+    - mean_squared_error
+  architecture:
+    input_shape: [60, 20, 1]  # [sequence_length, features, channels]
+    layers:
+      - type: conv2d
+        filters: 32
+        kernel_size: [3, 3]
+        activation: relu
+      - type: max_pooling2d
+        pool_size: [2, 2]
+      - type: conv2d
+        filters: 64
+        kernel_size: [3, 3]
+        activation: relu
+      - type: max_pooling2d
+        pool_size: [2, 2]
+      - type: flatten
+      - type: dense
+        units: 64
+        activation: relu
+        dropout: 0.3
+      - type: dense
+        units: 1
+        activation: linear
+
+# XGBoost model settings
+xgboost:
+  objective: reg:squarederror
+  eval_metric: rmse
+  learning_rate: 0.1
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  n_estimators: 1000
+  early_stopping_rounds: 50
+  verbosity: 1
+
+# Model serving settings
+serving:
+  port: 8500
+  model_name: trading_model
+  signature_name: serving_default
+  batching: true
+  max_batch_size: 32
+  batch_timeout_micros: 10000
+  num_batch_threads: 4
+  enable_profiling: false

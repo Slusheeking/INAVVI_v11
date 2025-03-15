@@ -4,9 +4,8 @@ CNN Model for the Autonomous Trading System.
 This module provides a Convolutional Neural Network (CNN) model for time series prediction.
 """
 
-import logging
 import os
-import numpy as np
+import numpy as np  # Used for np.ndarray type hints in docstrings
 
 # TensorFlow imports - Pylance may show errors but these will work at runtime
 import tensorflow as tf
@@ -15,7 +14,9 @@ from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense, Dropou
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 class CNNModel:
     """
@@ -201,7 +202,8 @@ class CNNModel:
         if self.model is None:
             raise ValueError("Model not trained. Call fit() first.")
         
-        self.model.save(path)
+        from src.utils.serialization import serialize_model
+        serialize_model(self.model, path)
         logger.info(f"Model saved to {path}")
     
     def load(self, path):
@@ -211,7 +213,8 @@ class CNNModel:
         Args:
             path (str): Path to load the model from
         """
-        self.model = tf.keras.models.load_model(path)
+        from src.utils.serialization import deserialize_model
+        self.model = deserialize_model(path)
         logger.info(f"Model loaded from {path}")
         
     def summary(self):

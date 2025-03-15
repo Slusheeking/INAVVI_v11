@@ -71,7 +71,7 @@ python -c "
 import sys
 sys.path.insert(0, '$PROJECT_ROOT')
 try:
-    from autonomous_trading_system.src.config.database_config import get_db_connection_string
+    from src.config.database_config import get_db_connection_string
     from sqlalchemy import create_engine, text
     
     connection_string = get_db_connection_string()
@@ -94,10 +94,13 @@ except Exception as e:
     print(f'Error connecting to database: {e}')
 "
 
-# Create output directory for reports
+# Create output directories for reports and logs
 REPORT_DIR="$PROJECT_ROOT/results/$(date +%Y%m%d_%H%M%S)"
+LOG_DIR="$PROJECT_ROOT/src/logs"
 mkdir -p "$REPORT_DIR"
+mkdir -p "$LOG_DIR"
 echo "Reports will be saved to: $REPORT_DIR"
+echo "Logs will be saved to: $LOG_DIR"
 
 # Run the full system test
 echo "Running full system test..."
@@ -107,7 +110,7 @@ cd "$PROJECT_ROOT"
 export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 
 # Run the test with output logging
-python -m autonomous_trading_system.src.tests.full_system_test 2>&1 | tee "$REPORT_DIR/full_system_test.log"
+python -m src.tests.full_system_test 2>&1 | tee "$REPORT_DIR/full_system_test.log"
 
 # Check the exit code (use the exit code of the first command in the pipe)
 if [ ${PIPESTATUS[0]} -eq 0 ]; then

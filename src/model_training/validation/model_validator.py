@@ -4,13 +4,26 @@ Model Validator for the Autonomous Trading System.
 This module provides functionality for validating model performance.
 """
 
-import logging
 import numpy as np
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.metrics import confusion_matrix
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger
+from src.utils.metrics import (
+    calculate_cumulative_returns,
+    calculate_drawdowns,
+    calculate_sharpe_ratio,
+    calculate_max_consecutive_wins,
+    calculate_max_consecutive_losses,
+)
+from src.utils.serialization import (
+    save_json,
+    load_json,
+    object_to_json_string,
+)
+
+logger = get_logger(__name__)
 
 class ModelValidator:
     """
@@ -140,43 +153,36 @@ class ModelValidator:
             true_returns[i] = y_true[i] * price_return
             pred_returns[i] = y_pred[i] * price_return
         
+        # Calculate cumulative returns
+        true_cum_returns = calculate_cumulative_returns(true_returns)
+        pred_cum_returns = calculate_cumulative_returns(pred_returns)
+        
+        # Calculate drawdowns
+        true_drawdowns, true_max_drawdown, _ = calculate_drawdowns(true_cum_returns)
+        pred_drawdowns, pred_max_drawdown, _ = calculate_drawdowns(pred_cum_returns)
+        
+        # Calculate Sharpe ratio
+        true_sharpe = calculate_sharpe_ratio(true_returns)
+        pred_sharpe = calculate_sharpe_ratio(pred_returns)
+        
         # Calculate metrics
         metrics = {
-            'true_total_return': np.sum(true_returns),
-            'pred_total_return': np.sum(pred_returns),
-            'true_sharpe_ratio': np.mean(true_returns) / np.std(true_returns) if np.std(true_returns) > 0 else 0,
-            'pred_sharpe_ratio': np.mean(pred_returns) / np.std(pred_returns) if np.std(pred_returns) > 0 else 0,
-            'true_max_drawdown': self._calculate_max_drawdown(true_returns),
-            'pred_max_drawdown': self._calculate_max_drawdown(pred_returns),
-            'signal_accuracy': np.mean(y_true == y_pred)
+            'true_total_return': true_cum_returns[-1] - 1.0,
+            'pred_total_return': pred_cum_returns[-1] - 1.0,
+            'true_sharpe_ratio': true_sharpe,
+            'pred_sharpe_ratio': pred_sharpe,
+            'true_max_drawdown': true_max_drawdown,
+            'pred_max_drawdown': pred_max_drawdown,
+            'signal_accuracy': np.mean(y_true == y_pred),
+            'true_max_consecutive_wins': calculate_max_consecutive_wins(true_returns),
+            'pred_max_consecutive_wins': calculate_max_consecutive_wins(pred_returns),
+            'true_max_consecutive_losses': calculate_max_consecutive_losses(true_returns),
+            'pred_max_consecutive_losses': calculate_max_consecutive_losses(pred_returns),
         }
         
         self.metrics['trading_strategy'] = metrics
+        logger.info(f"Trading strategy validation metrics: {object_to_json_string(metrics)}")
         return metrics
-    
-    def _calculate_max_drawdown(self, returns):
-        """
-        Calculate maximum drawdown.
-        
-        Args:
-            returns (np.ndarray): Returns
-            
-        Returns:
-            float: Maximum drawdown
-        """
-        # Calculate cumulative returns
-        cum_returns = np.cumprod(1 + returns)
-        
-        # Calculate running maximum
-        running_max = np.maximum.accumulate(cum_returns)
-        
-        # Calculate drawdown
-        drawdown = (cum_returns - running_max) / running_max
-        
-        # Calculate maximum drawdown
-        max_drawdown = np.min(drawdown)
-        
-        return max_drawdown
     
     def get_metrics(self, metric_type=None):
         """
@@ -206,20 +212,47 @@ class ModelValidator:
         
         if isinstance(metrics, dict):
             for metric_type, metric_values in metrics.items():
-                print(f"\n{metric_type.upper()} METRICS:")
+                logger.info(f"\n{metric_type.upper()} METRICS:")
                 for metric_name, metric_value in metric_values.items():
                     if isinstance(metric_value, list):
-                        print(f"  {metric_name}:")
+                        logger.info(f"  {metric_name}:")
                         for item in metric_value:
-                            print(f"    {item}")
+                            logger.info(f"    {item}")
                     else:
-                        print(f"  {metric_name}: {metric_value}")
+                        logger.info(f"  {metric_name}: {metric_value}")
         else:
-            print("\nMETRICS:")
+            logger.info("\nMETRICS:")
             for metric_name, metric_value in metrics.items():
                 if isinstance(metric_value, list):
-                    print(f"  {metric_name}:")
+                    logger.info(f"  {metric_name}:")
                     for item in metric_value:
-                        print(f"    {item}")
+                        logger.info(f"    {item}")
                 else:
-                    print(f"  {metric_name}: {metric_value}")
+                    logger.info(f"  {metric_name}: {metric_value}")
+    
+    def save_metrics(self, file_path: str, metric_type=None):
+        """
+        Save metrics to a file.
+        
+        Args:
+            file_path (str): Path to save the metrics to
+            metric_type (str): Type of metrics to save
+        """
+        metrics = self.get_metrics(metric_type)
+        save_json(metrics, file_path)
+        logger.info(f"Metrics saved to {file_path}")
+    
+    def load_metrics(self, file_path: str):
+        """
+        Load metrics from a file.
+        
+        Args:
+            file_path (str): Path to load the metrics from
+            
+        Returns:
+            dict: Loaded metrics
+        """
+        metrics = load_json(file_path)
+        self.metrics.update(metrics)
+        logger.info(f"Metrics loaded from {file_path}")
+        return metrics

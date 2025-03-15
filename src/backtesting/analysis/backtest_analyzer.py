@@ -4,34 +4,16 @@ BacktestAnalyzer: Component for analyzing backtest results.
 This module provides functionality for analyzing and interpreting the results
 of backtests, including performance metrics, trade statistics, and risk measures.
 """
-import logging
 import numpy as np
 import pandas as pd
-from pathlib import Path
 from typing import Dict, List, Any, Optional
 
+from src.utils.logging import get_logger
+from src.utils.metrics import calculate_trading_metrics
 from src.backtesting.analysis.strategy_analyzer import StrategyAnalyzer
 
 # Set up logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-# Create logs directory if it doesn't exist
-log_dir = Path('/home/ubuntu/INAVVI_v11-1/src/logs')
-log_dir.mkdir(parents=True, exist_ok=True)
-
-# Create file handler
-log_file = log_dir / 'backtest_analyzer.log'
-file_handler = logging.FileHandler(log_file)
-file_handler.setLevel(logging.INFO)
-
-# Create formatter
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-
-# Add handler to logger
-logger.addHandler(file_handler)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class BacktestAnalyzer:
     """
@@ -109,9 +91,9 @@ class BacktestAnalyzer:
         self.results[backtest_id] = results
         return results
     
-    def _calculate_performance_metrics(self, 
-                                      trades_df: pd.DataFrame, 
-                                      portfolio_df: pd.DataFrame) -> Dict[str, float]:
+    def _calculate_performance_metrics(self,
+                                       trades_df: pd.DataFrame,
+                                       portfolio_df: pd.DataFrame) -> Dict[str, float]:
         """
         Calculate performance metrics from backtest results.
         
@@ -122,54 +104,19 @@ class BacktestAnalyzer:
         Returns:
             Dict of performance metrics
         """
-        metrics = {}
-        
         if not portfolio_df.empty and 'equity' in portfolio_df.columns:
-            # Calculate returns
-            portfolio_df['returns'] = portfolio_df['equity'].pct_change()
+            # Ensure returns are calculated
+            if 'returns' not in portfolio_df.columns:
+                portfolio_df['returns'] = portfolio_df['equity'].pct_change()
             
-            # Calculate cumulative returns
-            initial_equity = portfolio_df['equity'].iloc[0]
-            final_equity = portfolio_df['equity'].iloc[-1]
-            total_return = (final_equity / initial_equity) - 1
-            
-            # Calculate annualized return
-            days = (portfolio_df.index[-1] - portfolio_df.index[0]).days
-            if days > 0:
-                annualized_return = (1 + total_return) ** (365 / days) - 1
-            else:
-                annualized_return = 0
-            
-            # Calculate volatility
-            daily_returns = portfolio_df['returns'].dropna()
-            if not daily_returns.empty:
-                volatility = daily_returns.std()
-                annualized_volatility = volatility * np.sqrt(252)  # Assuming 252 trading days
-            else:
-                volatility = 0
-                annualized_volatility = 0
-            
-            # Calculate Sharpe ratio (assuming risk-free rate of 0)
-            if annualized_volatility > 0:
-                sharpe_ratio = annualized_return / annualized_volatility
-            else:
-                sharpe_ratio = 0
-            
-            # Calculate drawdown
-            portfolio_df['peak'] = portfolio_df['equity'].cummax()
-            portfolio_df['drawdown'] = (portfolio_df['equity'] - portfolio_df['peak']) / portfolio_df['peak']
-            max_drawdown = portfolio_df['drawdown'].min()
-            
-            metrics = {
-                'total_return': total_return,
-                'annualized_return': annualized_return,
-                'volatility': volatility,
-                'annualized_volatility': annualized_volatility,
-                'sharpe_ratio': sharpe_ratio,
-                'max_drawdown': max_drawdown,
-            }
+            # Use the metrics utility to calculate performance metrics
+            metrics = calculate_trading_metrics(
+                portfolio_df['equity'],
+                portfolio_df['returns'].dropna()
+            )
+            return metrics
         
-        return metrics
+        return {}
     
     def _calculate_trade_statistics(self, trades_df: pd.DataFrame) -> Dict[str, Any]:
         """

@@ -12,22 +12,22 @@ echo "Starting Autonomous Trading System..."
 echo "Checking if required existing containers are running..."
 
 # Check TimescaleDB container
-if ! docker ps | grep -q "timescaledb-v1-1"; then
-    echo "Error: TimescaleDB container (timescaledb-v1-1) is not running."
+if ! docker ps | grep -q "ats-timescaledb-main"; then
+    echo "Error: TimescaleDB container (ats-timescaledb-main) is not running."
     echo "Please start the TimescaleDB container before running this script."
     exit 1
 fi
 
 # Check TensorFlow model training container
-if ! docker ps | grep -q "model-training-tensorflow-v1-1"; then
-    echo "Error: TensorFlow model training container (model-training-tensorflow-v1-1) is not running."
+if ! docker ps | grep -q "ats-model-training-tf"; then
+    echo "Error: TensorFlow model training container (ats-model-training-tf) is not running."
     echo "Please start the TensorFlow model training container before running this script."
     exit 1
 fi
 
 # Check TensorFlow feature engineering container
-if ! docker ps | grep -q "feature-engineering-tensorflow-v1-1"; then
-    echo "Error: TensorFlow feature engineering container (feature-engineering-tensorflow-v1-1) is not running."
+if ! docker ps | grep -q "ats-feature-engineering"; then
+    echo "Error: TensorFlow feature engineering container (ats-feature-engineering) is not running."
     echo "Please start the TensorFlow feature engineering container before running this script."
     exit 1
 fi

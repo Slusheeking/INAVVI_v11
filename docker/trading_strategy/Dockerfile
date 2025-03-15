@@ -1,35 +1,49 @@
-# Use the same NVIDIA TensorFlow image as the existing containers
 FROM nvcr.io/nvidia/tensorflow:24.02-tf2-py3
 
-# Set up environment variables
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
     TZ=UTC \
     DEBIAN_FRONTEND=noninteractive
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
-    tzdata \
     curl \
+    git \
+    wget \
+    build-essential \
     ca-certificates \
+    libc6-dev \
+    linux-libc-dev \
+    libstdc++-11-dev \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# Set up Python environment
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir \
+# Install Python dependencies
+RUN pip install --no-cache-dir \
     psycopg2-binary \
+    redis \
     pandas \
-    pytz \
-    requests \
-    sqlalchemy \
     numpy \
     alpaca-trade-api \
-    ccxt \
-    redis
+    fastapi \
+    uvicorn \
+    pydantic \
+    prometheus-client \
+    pytz \
+    pyyaml \
+    requests \
+    python-dotenv \
+    pytest \
+    pytest-cov \
+    flake8 \
+    black \
+    isort
 
-# Create app directory
+# Create app directories
 WORKDIR /app
+
+# Create necessary directories
+RUN mkdir -p /app/logs
 
 # Create non-root user
 RUN groupadd -g 1000 appuser && \
@@ -37,54 +51,22 @@ RUN groupadd -g 1000 appuser && \
     chown -R appuser:appuser /app
 
 # Copy application code
-COPY --chown=appuser:appuser autonomous_trading_system/src/utils /app/src/utils
-COPY --chown=appuser:appuser autonomous_trading_system/src/trading_strategy /app/src/trading_strategy
+COPY --chown=appuser:appuser src/utils /app/src/utils
+COPY --chown=appuser:appuser src/trading_strategy /app/src/trading_strategy
+COPY --chown=appuser:appuser docker/trading_strategy/start.sh /app/start.sh
 
-# Create a main.py file for the trading strategy service
-RUN echo 'import os\n\
-import sys\n\
-import time\n\
-import logging\n\
-from src.trading_strategy.alpaca.alpaca_integration import AlpacaIntegration\n\
-\n\
-# Configure logging\n\
-logging.basicConfig(\n\
-    level=os.environ.get("LOG_LEVEL", "INFO"),\n\
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",\n\
-    handlers=[\n\
-        logging.StreamHandler(sys.stdout)\n\
-    ]\n\
-)\n\
-\n\
-logger = logging.getLogger("trading_strategy")\n\
-\n\
-def main():\n\
-    logger.info("Starting Trading Strategy Service")\n\
-    \n\
-    # Initialize the trading strategy\n\
-    strategy = AlpacaIntegration(\n\
-        max_position_size=float(os.environ.get("MAX_POSITION_SIZE", 2500)),\n\
-        risk_percentage=float(os.environ.get("RISK_PERCENTAGE", 0.02)),\n\
-        max_positions=int(os.environ.get("MAX_POSITIONS", 50))\n\
-    )\n\
-    \n\
-    # Start the trading strategy\n\
-    strategy.start()\n\
-    \n\
-    try:\n\
-        # Keep the main thread alive\n\
-        while True:\n\
-            time.sleep(1)\n\
-    except KeyboardInterrupt:\n\
-        logger.info("Shutting down Trading Strategy Service")\n\
-        strategy.stop()\n\
-\n\
-if __name__ == "__main__":\n\
-    main()\n\
-' > /app/src/trading_strategy/main.py
+# Make start script executable
+RUN chmod +x /app/start.sh
 
 # Switch to non-root user
 USER appuser
 
-# Set entry point
-CMD ["python", "-m", "src.trading_strategy.main"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8002/health || exit 1
+
+# Expose port
+EXPOSE 8002
+
+# Start the application
+CMD ["/app/start.sh"]

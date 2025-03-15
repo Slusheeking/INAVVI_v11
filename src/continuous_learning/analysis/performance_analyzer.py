@@ -6,30 +6,18 @@ This module provides functionality for analyzing the performance of trading stra
 and models to identify areas for improvement and adaptation.
 """
 
-import json
-import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-# Fix for matplotlib import issue
-try:
-    # First, try to import matplotlib._docstring as docstring to fix the missing module
-    import sys
-    import matplotlib
-    if not hasattr(matplotlib, 'docstring') and hasattr(matplotlib, '_docstring'):
-        sys.modules['matplotlib.docstring'] = matplotlib._docstring
-        matplotlib.docstring = matplotlib._docstring
-except Exception:
-    pass  # Silently handle any issues with the matplotlib fix
 import numpy as np
 import pandas as pd
 from scipy import stats
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger("performance_analyzer")
+# Import project utilities
+from src.utils.logging import get_logger
+from src.utils.serialization import save_json
+
+logger = get_logger("performance_analyzer")
 
 
 class PerformanceAnalyzer:
@@ -1377,8 +1365,7 @@ class PerformanceAnalyzer:
 
         # Save report if path is provided
         if save_path:
-            with open(save_path, "w") as f:
-                json.dump(report, f, indent=2)
+            save_json(report, save_path)
             logger.info(f"Performance report saved to {save_path}")
             
             # Also save plot data
@@ -1517,10 +1504,8 @@ class PerformanceAnalyzer:
             
             # Save plot data
             if save_path:
-                import json
                 json_path = save_path.rsplit('.', 1)[0] + '.json' if '.' in save_path else save_path + '.json'
-                with open(json_path, 'w') as f:
-                    json.dump(plot_data, f, indent=2)
+                save_json(plot_data, json_path)
                 logger.info(f"Performance plot data saved to {json_path}")
                 logger.info("Note: Use an external plotting tool to visualize this data, or reinstall compatible matplotlib.")
 
@@ -1577,7 +1562,10 @@ if __name__ == "__main__":
     results = analyzer.analyze_performance(trades_df, equity_curve)
 
     # Print results
-    print(json.dumps(results, indent=2))
+    from src.utils.serialization import save_json
+    print(str(results))
+    # Save results to file for better viewing
+    save_json(results, "performance_analysis_results.json")
 
     # Plot performance
     analyzer.plot_performance(equity_curve, trades_df, save_path="performance_plot")

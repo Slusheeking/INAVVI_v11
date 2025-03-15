@@ -5,13 +5,12 @@ This module provides the StopLossManager class for managing stop losses for posi
 including fixed stops, trailing stops, and time-based stops.
 """
 
-import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Tuple
 
+from src.utils.logging import get_logger
 
-
-logger = logging.getLogger(__name__)
+logger = get_logger("trading_strategy.risk.stop_loss_manager")
 
 
 class StopLossManager:

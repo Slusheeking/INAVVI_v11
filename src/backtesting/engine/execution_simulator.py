@@ -4,31 +4,13 @@ ExecutionSimulator: Component for simulating trade execution in backtests.
 This module provides functionality for simulating trade execution with various
 models for commissions, slippage, and market impact.
 """
-import logging
 import numpy as np
-from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-# Set up logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+from src.utils.logging import get_logger
 
-# Create logs directory if it doesn't exist
-log_dir = Path('/home/ubuntu/INAVVI_v11-1/src/logs')
-log_dir.mkdir(parents=True, exist_ok=True)
-
-# Create file handler
-log_file = log_dir / 'execution_simulator.log'
-file_handler = logging.FileHandler(log_file)
-file_handler.setLevel(logging.INFO)
-
-# Create formatter
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-
-# Add handler to logger
-logger.addHandler(file_handler)
-logger = logging.getLogger(__name__)
+# Set up logger for this module
+logger = get_logger("backtesting.engine.execution_simulator")
 
 class ExecutionSimulator:
     """

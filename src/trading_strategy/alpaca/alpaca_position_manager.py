@@ -5,7 +5,6 @@ This module provides the AlpacaPositionManager class for managing positions thro
 including position tracking, updates, and risk management.
 """
 
-import logging
 from datetime import datetime
 from typing import Any
 
@@ -13,8 +12,9 @@ from src.trading_strategy.alpaca.alpaca_client import AlpacaClient
 from src.trading_strategy.risk.profit_target_manager import ProfitTargetManager
 from src.trading_strategy.risk.stop_loss_manager import StopLossManager
 from src.trading_strategy.signals.peak_detector import PeakDetector
+from src.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("trading_strategy.alpaca.alpaca_position_manager")
 
 
 class AlpacaPositionManager:
@@ -134,7 +134,7 @@ class AlpacaPositionManager:
             return self.positions
 
         # Get account information
-        account = self.alpaca.get_account(force_refresh=True)
+        account = self.alpaca.get_account()
 
         # Get current positions from Alpaca
         alpaca_positions = self.alpaca.get_positions()

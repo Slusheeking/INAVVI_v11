@@ -4,20 +4,15 @@ CLI command to run backtests for the autonomous trading system.
 """
 
 import argparse
-import json
-import logging
 import os
 import sys
 from datetime import datetime, timedelta
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+from src.utils.logging import get_logger
+from src.utils.serialization import save_json
 
-logger = logging.getLogger("inavvi-backtest")
+# Set up logger for this module
+logger = get_logger("cli.backtest")
 
 def parse_args():
     """Parse command line arguments."""
@@ -134,12 +129,11 @@ def run_backtest(args):
         
         # Save results to file if specified
         if args.output:
-            with open(args.output, "w") as f:
-                json.dump({
-                    "config": vars(args),
-                    "metrics": metrics,
-                    "trades": [trade.to_dict() for trade in results["trades"]]
-                }, f, indent=2)
+            save_json({
+                "config": vars(args),
+                "metrics": metrics,
+                "trades": [trade.to_dict() for trade in results["trades"]]
+            }, args.output, indent=2)
             logger.info(f"Results saved to {args.output}")
         
         # Generate plots if specified
@@ -177,7 +171,9 @@ def main():
     args = parse_args()
     
     # Set log level
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
+    # Note: get_logger already sets up the logger, but we can update the level if needed
+    if args.log_level:
+        logger.setLevel(args.log_level)
     
     # Run backtest
     if not run_backtest(args):

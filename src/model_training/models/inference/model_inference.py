@@ -4,16 +4,21 @@ Model Inference for the Autonomous Trading System.
 This module provides functionality for model inference.
 """
 
-import logging
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 import joblib
 import os
-import json
 import time
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger
+from src.utils.serialization import (
+    load_json,
+    deserialize_model,
+)
+from src.utils.time import now
+
+logger = get_logger(__name__)
 
 class ModelInference:
     """
@@ -86,7 +91,8 @@ class ModelInference:
                     logger.warning(f"Could not fully optimize TensorFlow: {e}")
                 
                 # Load the model with optimized settings
-                self.model = tf.keras.models.load_model(model_path)
+                # Use our serialization utilities for loading TensorFlow models
+                self.model = deserialize_model(model_path)
                 
                 # Optimize the loaded model for inference
                 try:
@@ -138,8 +144,7 @@ class ModelInference:
             raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
         
         try:
-            with open(metadata_path, 'r') as f:
-                metadata = json.load(f)
+            metadata = load_json(metadata_path)
             
             self.feature_names = metadata.get('feature_names')
             
@@ -475,7 +480,7 @@ class ModelInference:
                 "direction": direction,
                 "confidence": confidence,
                 "price": price,
-                "timestamp": pd.Timestamp.now().isoformat(),
+                "timestamp": now().isoformat(),
                 "model_id": self.current_model_id,
                 "model_type": self.model_type
             }

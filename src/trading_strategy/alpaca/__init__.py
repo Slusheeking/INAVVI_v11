@@ -1,18 +1,44 @@
 """
-Trading Strategy Alpaca Package
+Alpaca integration for the Autonomous Trading System.
 
-This package contains components for interacting with the Alpaca trading API.
+This module provides utilities for integrating with the Alpaca trading API,
+including client, position management, and trade execution.
 """
 
-from src.utils.logging.logger import get_logger
-from src.trading_strategy.alpaca.alpaca_client import AlpacaClient
-from src.trading_strategy.alpaca.alpaca_position_manager import AlpacaPositionManager
-from src.trading_strategy.alpaca.alpaca_trade_executor import AlpacaTradeExecutor
+from src.trading_strategy.alpaca.alpaca_client import (
+    AlpacaClient,
+    create_alpaca_client,
+    get_account_info,
+    get_positions,
+    get_orders,
+)
 
-# Set up logger for this module
-logger = get_logger("trading_strategy.alpaca")
-logger.info("Initializing trading strategy Alpaca package")
+from src.trading_strategy.alpaca.alpaca_position_manager import (
+    AlpacaPositionManager,
+    get_position,
+    update_position,
+    close_position,
+)
 
-__all__ = ["AlpacaClient", "AlpacaPositionManager", "AlpacaTradeExecutor"]
+from src.trading_strategy.alpaca.alpaca_trade_executor import (
+    AlpacaTradeExecutor,
+    execute_trade,
+    cancel_order,
+    replace_order,
+)
 
-logger.debug(f"Loaded Alpaca components: {', '.join(__all__)}")
+__all__ = [
+    "AlpacaClient",
+    "create_alpaca_client",
+    "get_account_info",
+    "get_positions",
+    "get_orders",
+    "AlpacaPositionManager",
+    "get_position",
+    "update_position",
+    "close_position",
+    "AlpacaTradeExecutor",
+    "execute_trade",
+    "cancel_order",
+    "replace_order",
+]

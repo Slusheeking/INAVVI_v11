@@ -5,7 +5,6 @@ This module provides the main pipeline for acquiring market data from various so
 and storing it in the database.
 """
 
-import logging
 import queue
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,8 +28,11 @@ from src.data_acquisition.storage.timescale_storage import (
 )
 # Removed unused imports: from src.utils.time.market_hours import get_market_status, MarketStatus
 
+# Import logging utility
+from src.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+# Set up logger
+logger = get_logger("data_acquisition.pipeline.data_pipeline")
 
 
 class DataPipeline:

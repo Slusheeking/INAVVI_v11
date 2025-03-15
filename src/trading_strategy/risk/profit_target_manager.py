@@ -5,12 +5,13 @@ This module provides the ProfitTargetManager class for managing profit targets f
 positions, including fixed targets, trailing targets, and time-based targets.
 """
 
-import logging
 import math
 from datetime import datetime, timedelta
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger
+
+logger = get_logger("trading_strategy.risk.profit_target_manager")
 
 
 class ProfitTargetManager:

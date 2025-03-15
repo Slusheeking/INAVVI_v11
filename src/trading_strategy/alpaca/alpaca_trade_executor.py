@@ -5,13 +5,14 @@ This module provides the AlpacaTradeExecutor class for executing trades through 
 Alpaca API, monitoring order status, and handling execution reports.
 """
 
-import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger
+
+logger = get_logger("trading_strategy.alpaca.alpaca_trade_executor")
 
 
 class AlpacaTradeExecutor:

@@ -5,9 +5,9 @@ This module provides configuration for database connection.
 """
 
 import os
-import logging
+from src.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("config.database_config")
 
 class DatabaseConfig:
     """

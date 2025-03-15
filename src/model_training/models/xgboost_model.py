@@ -8,7 +8,6 @@ and hyperparameter optimization.
 """
 
 import json
-import logging
 import os
 import tempfile
 import time
@@ -25,6 +24,9 @@ from sklearn.metrics import (
     recall_score,
 )
 from sklearn.model_selection import train_test_split
+
+# Import logging utility
+from src.utils.logging import get_logger
 
 # Define dummy dollar profit objective functions
 class DollarProfitObjective:
@@ -50,11 +52,8 @@ def create_dollar_profit_objective(**kwargs):
         return grad, hess
     return objective_function
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger("xgboost_model")
+# Get logger for this module
+logger = get_logger("xgboost_model")
 
 
 class XGBoostModel:

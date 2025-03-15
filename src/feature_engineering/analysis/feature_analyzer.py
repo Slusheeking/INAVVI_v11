@@ -4,13 +4,14 @@ Feature Analyzer for the Autonomous Trading System.
 This module provides functionality for analyzing feature importance and correlation.
 """
 
-import logging
 import numpy as np
 import pandas as pd
 from sklearn.feature_selection import mutual_info_regression
 from sklearn.ensemble import RandomForestRegressor
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 class FeatureAnalyzer:
     """

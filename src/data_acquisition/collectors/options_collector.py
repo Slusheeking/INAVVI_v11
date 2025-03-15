@@ -5,7 +5,6 @@ This module provides a collector for gathering options data from various sources
 Note: Options data is collected from Polygon.io as Alpaca does not provide options data in the free tier.
 """
 
-import logging
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
@@ -15,8 +14,11 @@ from src.data_acquisition.api.polygon_client import PolygonClient
 # Import pandas and numpy directly
 import pandas as pd
 
+# Import logging utility
+from src.utils.logging import get_logger
+
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger("data_acquisition.collectors.options_collector")
 
 
 class OptionsCollector:

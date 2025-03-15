@@ -7,7 +7,6 @@ unusual options activity, and other market insights.
 import os
 
 import time
-import logging
 import warnings
 from datetime import datetime, date
 from typing import Any
@@ -20,8 +19,11 @@ from src.utils.api import (
     RetryHandler,
 )
 
+# Import logging utility
+from src.utils.logging import get_logger
+
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger("data_acquisition.api.unusual_whales_client")
 
 
 class UnusualWhalesClient:
@@ -249,7 +251,7 @@ class UnusualWhalesClient:
                 raise ValueError(f"Unusual Whales API error: {error_msg}")
             
             # Only log detailed success info for non-high-priority requests
-            if not high_priority and logger.isEnabledFor(logging.DEBUG):
+            if not high_priority:
                 logger.debug(f"Successful response from {url}: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
             
             return data

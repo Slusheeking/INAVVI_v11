@@ -10,7 +10,6 @@ IMPORTANT: All Polygon.io API endpoints require specific version prefixes:
 """
 import time
 import json
-import logging
 import os
 import socket
 import websocket
@@ -29,8 +28,11 @@ from src.utils.api import (
 )
 # Production-ready imports only
 
+# Import logging utility
+from src.utils.logging import get_logger
+
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger("data_acquisition.api.polygon_client")
 
 class PolygonClient:
     """Client for interacting with the Polygon.io API."""
@@ -934,9 +936,8 @@ class PolygonClient:
             df["timestamp"] = pd.to_datetime("now")
             
         # Log DataFrame info for debugging
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Quote DataFrame columns: {list(df.columns)}")
-            logger.debug(f"Quote DataFrame size: {len(df)} rows")
+        logger.debug(f"Quote DataFrame columns: {list(df.columns)}")
+        logger.debug(f"Quote DataFrame size: {len(df)} rows")
         # Add additional columns
         df["symbol"] = ticker
         df["source"] = "polygon"

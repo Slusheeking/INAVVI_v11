@@ -11,19 +11,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-# Import standard Python modules
-import logging
-import concurrent.futures
-
 # Import project modules
 from src.feature_engineering.store.feature_store import feature_store
+from src.utils.logging import get_logger
+from src.utils.concurrency import parallel_map
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FeaturePipeline:
@@ -314,28 +307,27 @@ class FeatureEngineer:
 
         # Generate features for each timeframe
         if parallel and len(timeframes_to_process) > 1:
-            # Use parallel processing with concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(self.max_workers, len(timeframes_to_process))) as executor:
-                # Submit tasks
-                future_to_timeframe = {
-                    executor.submit(
-                        self.generate_features,
-                        symbol,
-                        tf,
-                        lookback_days,
-                        store_features,
-                        include_target,
-                    ): tf for tf in timeframes_to_process
-                }
-                
-                # Process results as they complete
-                for future in concurrent.futures.as_completed(future_to_timeframe):
-                    timeframe = future_to_timeframe[future]
-                    try:
-                        features, targets = future.result()
-                        results[timeframe] = (features, targets)
-                    except Exception as e:
-                        logger.error(f"Error generating features for {symbol} {timeframe}: {e}")
+            # Use parallel processing with utility function
+            def process_timeframe(tf):
+                try:
+                    return tf, self.generate_features(
+                        symbol, tf, lookback_days, store_features, include_target
+                    )
+                except Exception as e:
+                    logger.error(f"Error generating features for {symbol} {tf}: {e}")
+                    return tf, (None, None)
+            
+            # Use parallel_map from utils.concurrency
+            processed_results = parallel_map(
+                process_timeframe,
+                timeframes_to_process,
+                max_workers=self.max_workers
+            )
+            
+            # Process results
+            for tf, (features, targets) in processed_results:
+                if features is not None:
+                    results[tf] = (features, targets)
         else:
             # Sequential processing
             for timeframe in timeframes_to_process:

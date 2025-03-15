@@ -1,0 +1,194 @@
+# Feature Engineering Configuration
+
+# General settings
+general:
+  feature_store_path: /app/features
+  cache_enabled: true
+  cache_ttl: 3600  # seconds
+  batch_size: 1000
+  computation_threads: 8
+  random_seed: 42
+
+# Data sources
+data_sources:
+  - name: price_data
+    table: market_prices
+    timeframes:
+      - 1m
+      - 5m
+      - 15m
+      - 1h
+      - 1d
+    columns:
+      - open
+      - high
+      - low
+      - close
+      - volume
+    
+  - name: quote_data
+    table: market_quotes
+    timeframes:
+      - 1m
+    columns:
+      - bid_price
+      - ask_price
+      - bid_size
+      - ask_size
+      - spread
+  
+  - name: trade_data
+    table: market_trades
+    timeframes:
+      - 1m
+    columns:
+      - price
+      - size
+      - conditions
+
+# Feature groups
+feature_groups:
+  - name: price_features
+    source: price_data
+    features:
+      # Technical indicators
+      - name: sma
+        function: ta.trend.sma_indicator
+        params:
+          window: [5, 10, 20, 50, 200]
+        input_column: close
+      
+      - name: ema
+        function: ta.trend.ema_indicator
+        params:
+          window: [5, 10, 20, 50, 200]
+        input_column: close
+      
+      - name: rsi
+        function: ta.momentum.rsi
+        params:
+          window: [14, 21]
+        input_column: close
+      
+      - name: macd
+        function: ta.trend.macd
+        params:
+          window_slow: 26
+          window_fast: 12
+          window_sign: 9
+        input_column: close
+        output_columns:
+          - macd
+          - macd_signal
+          - macd_diff
+      
+      - name: bollinger_bands
+        function: ta.volatility.bollinger_bands
+        params:
+          window: 20
+          window_dev: 2
+        input_column: close
+        output_columns:
+          - bollinger_hband
+          - bollinger_mavg
+          - bollinger_lband
+      
+      - name: atr
+        function: ta.volatility.average_true_range
+        params:
+          window: 14
+        input_columns:
+          - high
+          - low
+          - close
+      
+      # Price patterns
+      - name: engulfing
+        function: ta.candlestick.engulfing
+        input_columns:
+          - open
+          - high
+          - low
+          - close
+      
+      - name: doji
+        function: ta.candlestick.doji
+        input_columns:
+          - open
+          - high
+          - low
+          - close
+  
+  - name: volume_features
+    source: price_data
+    features:
+      - name: volume_sma
+        function: ta.volume.sma_volume
+        params:
+          window: [5, 10, 20]
+        input_column: volume
+      
+      - name: volume_ema
+        function: ta.volume.ema_volume
+        params:
+          window: [5, 10, 20]
+        input_column: volume
+      
+      - name: obv
+        function: ta.volume.on_balance_volume
+        input_columns:
+          - close
+          - volume
+  
+  - name: liquidity_features
+    source: quote_data
+    features:
+      - name: spread_ratio
+        function: custom.spread_ratio
+        input_columns:
+          - bid_price
+          - ask_price
+      
+      - name: bid_ask_imbalance
+        function: custom.bid_ask_imbalance
+        input_columns:
+          - bid_size
+          - ask_size
+
+# Feature transformations
+transformations:
+  - name: normalization
+    method: min_max_scaler
+    params:
+      feature_range: [0, 1]
+    apply_to:
+      - price_features
+      - volume_features
+  
+  - name: standardization
+    method: standard_scaler
+    params:
+      with_mean: true
+      with_std: true
+    apply_to:
+      - liquidity_features
+
+# Feature selection
+feature_selection:
+  method: recursive_feature_elimination
+  params:
+    n_features_to_select: 20
+    step: 1
+  estimator:
+    type: random_forest
+    params:
+      n_estimators: 100
+      random_state: 42
+
+# Feature store settings
+feature_store:
+  format: parquet
+  compression: snappy
+  partition_by: 
+    - symbol
+    - date

@@ -5,7 +5,7 @@ This package contains components for adapting trading strategies based on perfor
 analysis and changing market conditions.
 """
 
-from src.utils.logging.logger import get_logger
+from src.utils.logging import get_logger
 from src.continuous_learning.adaptation.strategy_adapter import StrategyAdapter
 
 # Set up logger for this module

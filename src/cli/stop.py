@@ -4,18 +4,13 @@ CLI command to stop the autonomous trading system.
 """
 
 import argparse
-import logging
 import subprocess
 import sys
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+from src.utils.logging import get_logger
 
-logger = logging.getLogger("inavvi-stop")
+# Set up logger for this module
+logger = get_logger("cli.stop")
 
 def parse_args():
     """Parse command line arguments."""
@@ -81,7 +76,9 @@ def main():
     args = parse_args()
     
     # Set log level
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
+    # Note: get_logger already sets up the logger, but we can update the level if needed
+    if args.log_level:
+        logger.setLevel(args.log_level)
     
     # Stop the system
     if not stop_system(args):

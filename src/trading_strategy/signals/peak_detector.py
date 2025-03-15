@@ -5,13 +5,16 @@ This module provides the PeakDetector class for detecting peaks and troughs in p
 to identify optimal exit points.
 """
 
-import logging
-from typing import Any
+from typing import Any, Dict, List
 
 import numpy as np
 from scipy.signal import find_peaks
 
-logger = logging.getLogger(__name__)
+from src.utils.metrics.metrics_utils import calculate_trading_metrics
+from src.utils.serialization.serialization_utils import save_json, load_json
+from src.utils.logging import get_logger
+
+logger = get_logger("trading_strategy.signals.peak_detector")
 
 
 class PeakDetector:
@@ -609,3 +612,89 @@ class PeakDetector:
         trend_strength = max(0.0, min(1.0, trend_strength))
 
         return trend_strength
+        
+    def calculate_performance_metrics(
+        self,
+        prices: np.ndarray,
+        exit_points: List[Dict[str, Any]],
+        entry_price: float,
+        direction: str = "long",
+        risk_free_rate: float = 0.0,
+    ) -> Dict[str, float]:
+        """
+        Calculate performance metrics for a trading strategy based on detected exit points.
+        
+        Args:
+            prices: Array of price data
+            exit_points: List of exit points (peaks or troughs)
+            entry_price: Entry price for the trade
+            direction: Trade direction ('long' or 'short')
+            risk_free_rate: Risk-free rate for Sharpe ratio calculation
+            
+        Returns:
+            Dictionary of performance metrics
+        """
+        if not exit_points or len(prices) == 0:
+            logger.warning("No exit points or prices provided for performance metrics calculation")
+            return {}
+        
+        # Calculate returns based on exit points
+        returns = []
+        
+        for exit_point in exit_points:
+            exit_price = exit_point["price"]
+            
+            if direction.lower() == "long":
+                # For long positions, return = (exit_price - entry_price) / entry_price
+                ret = (exit_price - entry_price) / entry_price
+            else:
+                # For short positions, return = (entry_price - exit_price) / entry_price
+                ret = (entry_price - exit_price) / entry_price
+                
+            returns.append(ret)
+        
+        # Use metrics_utils to calculate trading metrics
+        metrics = calculate_trading_metrics(
+            returns=returns,
+            risk_free_rate=risk_free_rate,
+            periods_per_year=252  # Assuming daily data
+        )
+        
+        logger.info(f"Calculated performance metrics: win_rate={metrics['win_rate']:.2f}, "
+                   f"profit_factor={metrics['profit_factor']:.2f}, "
+                   f"expectancy={metrics['expectancy']:.4f}")
+        
+        return metrics
+    
+    def save_analysis(self, analysis: Dict[str, Any], file_path: str) -> None:
+        """
+        Save price structure analysis to a file.
+        
+        Args:
+            analysis: Analysis results from analyze_price_structure
+            file_path: Path to save the analysis
+        """
+        try:
+            save_json(analysis, file_path, indent=2)
+            logger.info(f"Saved price structure analysis to {file_path}")
+        except Exception as e:
+            logger.error(f"Error saving price structure analysis: {e}")
+            raise
+    
+    def load_analysis(self, file_path: str) -> Dict[str, Any]:
+        """
+        Load price structure analysis from a file.
+        
+        Args:
+            file_path: Path to load the analysis from
+            
+        Returns:
+            Analysis results
+        """
+        try:
+            analysis = load_json(file_path)
+            logger.info(f"Loaded price structure analysis from {file_path}")
+            return analysis
+        except Exception as e:
+            logger.error(f"Error loading price structure analysis: {e}")
+            raise

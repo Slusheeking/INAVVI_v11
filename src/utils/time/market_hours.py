@@ -7,15 +7,15 @@ sessions for different exchanges.
 
 import datetime
 from enum import Enum
-import logging
 from typing import Dict, List, Tuple
 
 import pytz
 
-from .time_utils import get_day_of_week, is_weekend
+from .base.time_utils_base import get_day_of_week, is_weekend
+from src.utils.logging import get_logger
 
 # Configure logger
-logger = logging.getLogger(__name__)
+logger = get_logger("utils.time.market_hours")
 
 class MarketStatus(Enum):
     """Enum representing the status of a market."""
@@ -729,6 +729,37 @@ def get_next_market_open(
     raise ValueError(
         f"Could not find next market open time for {exchange} within 10 days"
     )
+
+
+def is_market_open(time_zone: str, current_date: datetime.datetime) -> bool:
+    """
+    Check if the market is open at the given datetime.
+
+    Args:
+        time_zone: Time zone string (e.g., "America/New_York")
+        current_date: Datetime object
+
+    Returns:
+        True if the market is open, False otherwise
+    """
+    logger.debug(f"Checking if market is open at {current_date} in {time_zone}")
+    
+    # Find the exchange for the given time zone
+    exchange = None
+    for exch, tz in EXCHANGE_TIMEZONES.items():
+        if tz == time_zone:
+            exchange = exch
+            break
+    
+    if exchange is None:
+        logger.error(f"Unknown time zone: {time_zone}")
+        raise ValueError(f"Unknown time zone: {time_zone}")
+    
+    # Get the market status
+    status = get_market_status(current_date, exchange, use_exchange_time=True)
+    
+    # Return True if the market is open
+    return status == MarketStatus.OPEN
 
 
 def get_next_market_close(

@@ -1,16 +1,24 @@
 """
-Trading Strategy Execution Package
+Execution utilities for the Autonomous Trading System.
 
-This package contains components for executing trading orders and managing trade execution.
+This module provides utilities for executing trades, including
+order generation and trade execution.
 """
 
-from src.utils.logging.logger import get_logger
-from src.trading_strategy.execution.order_generator import OrderGenerator
+from src.trading_strategy.execution.order_generator import (
+    OrderGenerator,
+    generate_order,
+    generate_limit_order,
+    generate_market_order,
+    generate_stop_order,
+    generate_stop_limit_order,
+)
 
-# Set up logger for this module
-logger = get_logger("trading_strategy.execution")
-logger.info("Initializing trading strategy execution package")
-
-__all__ = ["OrderGenerator"]
-
-logger.debug(f"Loaded execution components: {', '.join(__all__)}")
+__all__ = [
+    "OrderGenerator",
+    "generate_order",
+    "generate_limit_order",
+    "generate_market_order",
+    "generate_stop_order",
+    "generate_stop_limit_order",
+]

@@ -13,10 +13,22 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 
 # Create logs directory if it doesn't exist
-# Get the project root directory (3 levels up from the current file)
+# Get the project root directory (should be /home/ubuntu/INAVVI_v11-1)
+# We need to ensure we're using the correct project root regardless of where the file is located
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../..'))
+# Ensure we're using the correct logs directory at the project root, not in src/logs
 LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
+
+# Print the log directory for debugging
+print(f"Logging to directory: {LOG_DIR}")
+
+# Check if src/logs exists and move any existing logs to the correct location
+src_logs_dir = os.path.join(PROJECT_ROOT, 'src', 'logs')
+if os.path.exists(src_logs_dir):
+    print(f"Found logs in {src_logs_dir}, these should be moved to {LOG_DIR}")
+    # We don't actually move the files here to avoid potential issues,
+    # but we make sure all new logs go to the correct location
 
 # Default log format
 DEFAULT_LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

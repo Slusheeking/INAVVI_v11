@@ -1,18 +1,18 @@
 """
-Model Training Models Package
+Machine learning models for the Autonomous Trading System.
 
-This package contains the machine learning models used for prediction in the autonomous trading system.
+This module provides implementations of various machine learning models
+used for prediction and decision-making in the trading system.
 """
 
-from src.utils.logging.logger import get_logger
-from src.model_training.models.xgboost_model import XGBoostModel
-from src.model_training.models.lstm_model import LSTMModel
 from src.model_training.models.cnn_model import CNNModel
+from src.model_training.models.lstm_model import LSTMModel
+from src.model_training.models.xgboost_model import XGBoostModel
+from src.model_training.models.inference import ModelInference
 
-# Set up logger for this module
-logger = get_logger("model_training.models")
-logger.info("Initializing model training models package")
-
-__all__ = ["XGBoostModel", "LSTMModel", "CNNModel"]
-
-logger.debug(f"Loaded models: {', '.join(__all__)}")
+__all__ = [
+    "CNNModel",
+    "LSTMModel",
+    "XGBoostModel",
+    "ModelInference",
+]

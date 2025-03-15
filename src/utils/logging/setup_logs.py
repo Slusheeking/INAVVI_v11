@@ -12,7 +12,7 @@ from datetime import datetime
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 
-from src.utils.logging.logger import get_all_loggers, log_to_file
+from src.utils.logging import get_all_loggers, log_to_file
 
 def setup_logs():
     """

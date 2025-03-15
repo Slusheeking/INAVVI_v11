@@ -1,16 +1,22 @@
 """
-Trading Strategy Sizing Package
+Position sizing for the Autonomous Trading System.
 
-This package contains components for determining position sizes based on risk parameters.
+This module provides utilities for determining position sizes in trading strategies,
+including risk-based position sizing and other position sizing methods.
 """
 
-from src.utils.logging.logger import get_logger
-from src.trading_strategy.sizing.risk_based_position_sizer import RiskBasedPositionSizer
+from src.trading_strategy.sizing.risk_based_position_sizer import (
+    RiskBasedPositionSizer,
+    calculate_position_size,
+    calculate_max_position_size,
+    calculate_position_value,
+    calculate_shares_from_risk,
+)
 
-# Set up logger for this module
-logger = get_logger("trading_strategy.sizing")
-logger.info("Initializing trading strategy sizing package")
-
-__all__ = ["RiskBasedPositionSizer"]
-
-logger.debug(f"Loaded sizing components: {', '.join(__all__)}")
+__all__ = [
+    "RiskBasedPositionSizer",
+    "calculate_position_size",
+    "calculate_max_position_size",
+    "calculate_position_value",
+    "calculate_shares_from_risk",
+]

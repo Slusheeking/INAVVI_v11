@@ -5,7 +5,6 @@ This module provides functionality for storing market data in TimescaleDB.
 It uses the data schemas defined in data_schema.py for data validation and transformation.
 """
 
-import logging
 from datetime import datetime
 from typing import Any, Union
 
@@ -19,8 +18,11 @@ from src.config.database_config import (
 )
 # SchemaAdapter import removed
 
+# Import logging utility
+from src.utils.logging import get_logger
+
 # Configure logging
-logger = logging.getLogger(__name__)
+logger = get_logger("data_acquisition.storage.timescale_storage")
 
 
 class TimescaleStorage:

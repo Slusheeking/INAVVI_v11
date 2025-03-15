@@ -6,16 +6,15 @@ This module provides transformation functions for data received from various sou
 data typing, validation, and consistency.
 """
 
-import logging
 import json
-
-
-
 import numpy as np
 import pandas as pd
 
+# Import logging utility
+from src.utils.logging import get_logger
+
 # Configure logging
-logger = logging.getLogger(__name__)
+logger = get_logger("data_acquisition.transformation.data_transformer")
 
 
 class DataTransformer:

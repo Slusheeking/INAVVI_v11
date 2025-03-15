@@ -6,7 +6,6 @@ holidays, and sessions.
 """
 
 import datetime
-import logging
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -23,16 +22,16 @@ from .market_hours import (
     get_trading_sessions,
     is_market_holiday,
 )
-from .time_utils import (
+from .base.time_utils_base import (
     get_day_of_week,
     get_start_of_day,
     is_weekend,
     now,
 )
-
+from src.utils.logging import get_logger
 
 # Configure logger
-logger = logging.getLogger(__name__)
+logger = get_logger("utils.time.market_calendar")
 
 
 class MarketCalendar:

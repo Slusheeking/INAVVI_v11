@@ -7,8 +7,6 @@ from backtesting results, including key metrics, visualizations, and analysis.
 
 import base64
 import io
-import json
-import logging
 import os
 import requests
 from pathlib import Path
@@ -16,6 +14,9 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+
+from src.utils.logging import get_logger
+from src.utils.serialization import save_json
 
 # Try to import visualization libraries, but make them optional
 try:
@@ -49,12 +50,13 @@ class PerformanceReport:
         """
         # Set up logging
         try:
-            self.logger = logging.getLogger(__name__)
-            self.logger.setLevel(getattr(logging, log_level))
+            self.logger = get_logger(__name__)
+            # The get_logger utility already sets the log level, but we can override it
+            if log_level in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+                self.logger.setLevel(log_level)
         except AttributeError:
             # Fallback to INFO if invalid log level provided
-            self.logger = logging.getLogger(__name__)
-            self.logger.setLevel(logging.INFO)
+            self.logger = get_logger(__name__)
 
         # Initialize state
         self.results = None
@@ -1015,8 +1017,7 @@ class PerformanceReport:
 
         # Write notebook to file
         try:
-            with open(report_file, "w") as f:
-                json.dump(notebook, f, indent=2)
+            save_json(notebook, report_file, indent=2)
             self.logger.debug(f"Jupyter notebook report written to {report_file}")
         except (PermissionError, IOError) as e:
             self.logger.error(f"Failed to write Jupyter notebook report to {report_file}: {str(e)}")

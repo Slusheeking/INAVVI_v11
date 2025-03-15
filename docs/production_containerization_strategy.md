@@ -2,798 +2,757 @@
 
 ## Overview
 
-This document outlines a comprehensive containerization strategy for the Autonomous Trading System in a production environment. The strategy focuses on maximum flexibility, allowing each component to be deployed, scaled, and updated independently.
+This document outlines a simplified and robust containerization strategy for the Autonomous Trading System in a production environment, with detailed file structures for each container.
 
-## Containerization Architecture
+## Container File Structures
 
-```mermaid
-flowchart TD
-    subgraph "Docker Environment"
-        subgraph "Data Services"
-            TS1[(TimescaleDB)]
-        end
-
-        subgraph "Core Subsystems"
-            SC[System Controller]
-            DA[Data Acquisition]
-            FE[Feature Engineering]
-            MT[Model Training]
-            TS[Trading Strategy]
-        end
-
-        subgraph "Monitoring"
-            LOG[Logging Service]
-            METRICS[Metrics Collector]
-        end
-    end
-
-    subgraph "External Services"
-        PA[Polygon API]
-        AA[Alpaca API]
-        UW[Unusual Whales API]
-    end
-
-    PA --> DA
-    UW --> DA
-    AA <--> TS
-
-    SC --> DA
-    SC --> FE
-    SC --> MT
-    SC --> TS
-
-    DA --> TS1
-    FE --> TS1
-    MT --> TS1
-    TS --> TS1
-
-    SC --> LOG
-    DA --> LOG
-    FE --> LOG
-    MT --> LOG
-    TS --> LOG
-
-    SC --> METRICS
-    DA --> METRICS
-    FE --> METRICS
-    MT --> METRICS
-    TS --> METRICS
+### 1. System Controller Container
+```
+/app/
+├── src/
+│   ├── utils/
+│   │   ├── logging/
+│   │   │   ├── __init__.py
+│   │   │   ├── logger.py
+│   │   │   └── setup_logs.py
+│   │   ├── database/
+│   │   │   ├── __init__.py
+│   │   │   └── database_utils.py
+│   │   ├── metrics/
+│   │   │   ├── __init__.py
+│   │   │   └── metrics_utils.py
+│   │   └── time/
+│   │       ├── __init__.py
+│   │       ├── market_calendar.py
+│   │       └── market_hours.py
+│   └── system_controller/
+│       ├── __init__.py
+│       ├── main.py
+│       └── system_components.py
+├── config/
+│   ├── logging.yaml
+│   └── system_config.yaml
+└── logs/
+    └── system_controller.log
 ```
 
-## Directory Structure for Production Deployment
-
+### 2. Data Acquisition Container
 ```
-autonomous_trading_system/
-├── .env                           # Base environment variables
-├── docker-compose.yml             # Main Docker Compose configuration
-├── docker-compose.override.yml    # Environment-specific overrides
-├── config/                        # Configuration files
-│   ├── logging.yaml               # Logging configuration
-│   ├── market_hours.json          # Market hours configuration
-│   ├── feature_config.json        # Feature engineering configuration
-│   └── model_config.json          # Model training configuration
-├── docker/                        # Docker-related files
-│   ├── base/                      # Base Docker image
-│   │   └── Dockerfile             # Base Dockerfile
-│   ├── system_controller/         # System Controller Docker files
-│   │   ├── Dockerfile             # System Controller Dockerfile
-│   │   └── start.sh               # System Controller startup script
-│   ├── data_acquisition/          # Data Acquisition Docker files
-│   │   ├── Dockerfile             # Data Acquisition Dockerfile
-│   │   └── start.sh               # Data Acquisition startup script
-│   ├── feature_engineering/       # Feature Engineering Docker files
-│   │   ├── Dockerfile             # Feature Engineering Dockerfile
-│   │   └── start.sh               # Feature Engineering startup script
-│   ├── model_training/            # Model Training Docker files
-│   │   ├── Dockerfile             # Model Training Dockerfile
-│   │   └── start.sh               # Model Training startup script
-│   ├── trading_strategy/          # Trading Strategy Docker files
-│   │   ├── Dockerfile             # Trading Strategy Dockerfile
-│   │   └── start.sh               # Trading Strategy startup script
-│   └── timescaledb/               # TimescaleDB Docker files
-│       └── init/                  # TimescaleDB initialization scripts
-│           └── init.sql           # Database initialization SQL
-├── scripts/                       # Management scripts
-│   ├── start_system.sh            # System startup script
-│   ├── stop_system.sh             # System shutdown script
-│   ├── system_status.sh           # System status script
-│   ├── backup_database.sh         # Database backup script
-│   └── backup_models.sh           # Model backup script
-└── src/                           # Source code (as in current structure)
-    ├── backtesting/
-    ├── continuous_learning/
-    ├── data_acquisition/
-    ├── feature_engineering/
-    ├── model_training/
-    ├── tests/
-    ├── trading_strategy/
-    └── utils/
+/app/
+├── src/
+│   ├── utils/
+│   │   ├── logging/
+│   │   ├── database/
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   └── api_utils.py
+│   │   └── time/
+│   ├── data_acquisition/
+│   │   ├── __init__.py
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   ├── polygon_client.py
+│   │   │   └── unusual_whales_client.py
+│   │   ├── collectors/
+│   │   │   ├── __init__.py
+│   │   │   ├── multi_timeframe_data_collector.py
+│   │   │   ├── options_collector.py
+│   │   │   ├── price_collector.py
+│   │   │   ├── quote_collector.py
+│   │   │   └── trade_collector.py
+│   │   ├── pipeline/
+│   │   │   ├── __init__.py
+│   │   │   └── data_pipeline.py
+│   │   ├── storage/
+│   │   │   ├── __init__.py
+│   │   │   └── timescale_storage.py
+│   │   └── transformation/
+│   │       ├── __init__.py
+│   │       └── data_transformer.py
+│   └── main.py
+├── config/
+│   ├── logging.yaml
+│   └── collectors_config.yaml
+└── logs/
+    └── data_acquisition.log
 ```
 
-## Component-Specific Dockerfiles
-
-### 1. Base Image Dockerfile
-
-```dockerfile
-# File: autonomous_trading_system/docker/base/Dockerfile
-
-# Base image with NVIDIA CUDA support
-FROM nvcr.io/nvidia/tensorflow:24.02-tf2-py3
-
-# Set up environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    TZ=UTC \
-    DEBIAN_FRONTEND=noninteractive
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    postgresql-client \
-    tzdata \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set up Python environment
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir \
-    psycopg2-binary \
-    pandas \
-    pytz \
-    requests \
-    sqlalchemy \
-    numpy
-
-# Create app directory
-WORKDIR /app
-
-# Create non-root user
-RUN groupadd -g 1000 appuser && \
-    useradd -r -u 1000 -g appuser appuser && \
-    chown -R appuser:appuser /app
-
-# Switch to non-root user
-USER appuser
-
-# Set default command
-CMD ["python", "-c", "import sys; print('Container is ready to use.')"]
+### 3. Trading Strategy Container
+```
+/app/
+├── src/
+│   ├── utils/
+│   │   ├── logging/
+│   │   ├── database/
+│   │   ├── metrics/
+│   │   └── time/
+│   ├── trading_strategy/
+│   │   ├── __init__.py
+│   │   ├── alpaca/
+│   │   │   ├── __init__.py
+│   │   │   ├── alpaca_client.py
+│   │   │   ├── alpaca_position_manager.py
+│   │   │   └── alpaca_trade_executor.py
+│   │   ├── execution/
+│   │   │   ├── __init__.py
+│   │   │   └── order_generator.py
+│   │   ├── risk/
+│   │   │   ├── __init__.py
+│   │   │   ├── profit_target_manager.py
+│   │   │   └── stop_loss_manager.py
+│   │   ├── selection/
+│   │   │   ├── __init__.py
+│   │   │   ├── ticker_selector.py
+│   │   │   └── timeframe_selector.py
+│   │   ├── signals/
+│   │   │   ├── __init__.py
+│   │   │   ├── entry_signal_generator.py
+│   │   │   └── peak_detector.py
+│   │   └── sizing/
+│   │       ├── __init__.py
+│   │       └── risk_based_position_sizer.py
+│   └── main.py
+├── config/
+│   ├── logging.yaml
+│   └── trading_config.yaml
+└── logs/
+    └── trading_strategy.log
 ```
 
-### 2. System Controller Dockerfile
-
-```dockerfile
-# File: autonomous_trading_system/docker/system_controller/Dockerfile
-
-FROM autonomous_trading_system/base:latest
-
-# Install specific dependencies
-RUN pip install --no-cache-dir \
-    pyyaml \
-    schedule \
-    prometheus_client
-
-# Copy application code
-COPY --chown=appuser:appuser src/config /app/src/config
-COPY --chown=appuser:appuser src/utils /app/src/utils
-COPY --chown=appuser:appuser src/tests/system_components.py /app/src/system_controller/system_components.py
-
-# Copy startup script
-COPY --chown=appuser:appuser docker/system_controller/start.sh /app/start.sh
-RUN chmod +x /app/start.sh
-
-# Set entry point
-ENTRYPOINT ["/app/start.sh"]
+### 4. Model Training Container
+```
+/app/
+├── src/
+│   ├── utils/
+│   │   ├── logging/
+│   │   ├── database/
+│   │   ├── metrics/
+│   │   └── time/
+│   ├── model_training/
+│   │   ├── __init__.py
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   ├── cnn_model.py
+│   │   │   ├── lstm_model.py
+│   │   │   ├── xgboost_model.py
+│   │   │   └── inference/
+│   │   │       ├── __init__.py
+│   │   │       └── model_inference.py
+│   │   ├── registry/
+│   │   │   ├── __init__.py
+│   │   │   └── model_registry.py
+│   │   └── validation/
+│   │       ├── __init__.py
+│   │       └── model_validator.py
+│   └── main.py
+├── config/
+│   ├── logging.yaml
+│   └── model_training_config.yaml
+└── logs/
+    └── model_training.log
 ```
 
-### 3. Data Acquisition Dockerfile
-
-```dockerfile
-# File: autonomous_trading_system/docker/data_acquisition/Dockerfile
-
-FROM autonomous_trading_system/base:latest
-
-# Install specific dependencies
-RUN pip install --no-cache-dir \
-    websocket-client \
-    polygon-api-client \
-    alpaca-trade-api \
-    aiohttp \
-    asyncio
-
-# Copy application code
-COPY --chown=appuser:appuser src/config /app/src/config
-COPY --chown=appuser:appuser src/utils /app/src/utils
-COPY --chown=appuser:appuser src/data_acquisition /app/src/data_acquisition
-
-# Copy startup script
-COPY --chown=appuser:appuser docker/data_acquisition/start.sh /app/start.sh
-RUN chmod +x /app/start.sh
-
-# Set entry point
-ENTRYPOINT ["/app/start.sh"]
+### 5. Feature Engineering Container
+```
+/app/
+├── src/
+│   ├── utils/
+│   │   ├── logging/
+│   │   ├── database/
+│   │   ├── metrics/
+│   │   └── time/
+│   ├── feature_engineering/
+│   │   ├── __init__.py
+│   │   ├── analysis/
+│   │   │   ├── __init__.py
+│   │   │   └── feature_analyzer.py
+│   │   ├── pipeline/
+│   │   │   ├── __init__.py
+│   │   │   └── feature_pipeline.py
+│   │   └── store/
+│   │       ├── __init__.py
+│   │       └── feature_store.py
+│   └── main.py
+├── config/
+│   ├── logging.yaml
+│   └── feature_engineering_config.yaml
+└── logs/
+    └── feature_engineering.log
 ```
 
-### 4. Feature Engineering Dockerfile
-
-```dockerfile
-# File: autonomous_trading_system/docker/feature_engineering/Dockerfile
-
-FROM autonomous_trading_system/base:latest
-
-# Install specific dependencies
-RUN pip install --no-cache-dir \
-    ta-lib \
-    scikit-learn \
-    statsmodels \
-    numba
-
-# Copy application code
-COPY --chown=appuser:appuser src/config /app/src/config
-COPY --chown=appuser:appuser src/utils /app/src/utils
-COPY --chown=appuser:appuser src/feature_engineering /app/src/feature_engineering
-
-# Copy startup script
-COPY --chown=appuser:appuser docker/feature_engineering/start.sh /app/start.sh
-RUN chmod +x /app/start.sh
-
-# Set entry point
-ENTRYPOINT ["/app/start.sh"]
+### 6. Continuous Learning Container
 ```
-
-### 5. Model Training Dockerfile
-
-```dockerfile
-# File: autonomous_trading_system/docker/model_training/Dockerfile
-
-FROM autonomous_trading_system/base:latest
-
-# Install specific dependencies
-RUN pip install --no-cache-dir \
-    xgboost \
-    scikit-learn \
-    optuna \
-    joblib \
-    tensorflow-tensorrt \
-    tensorflow-serving-api \
-    torch \
-    torchvision
-
-# Copy application code
-COPY --chown=appuser:appuser src/config /app/src/config
-COPY --chown=appuser:appuser src/utils /app/src/utils
-COPY --chown=appuser:appuser src/model_training /app/src/model_training
-
-# Set up TensorRT integration
-ENV TF_TRT_ENABLE=1 \
-    TF_XLA_FLAGS="--tf_xla_auto_jit=2 --tf_xla_cpu_global_jit"
-
-# Copy startup script
-COPY --chown=appuser:appuser docker/model_training/start.sh /app/start.sh
-RUN chmod +x /app/start.sh
-
-# Set entry point
-ENTRYPOINT ["/app/start.sh"]
-```
-
-### 6. Trading Strategy Dockerfile
-
-```dockerfile
-# File: autonomous_trading_system/docker/trading_strategy/Dockerfile
-
-FROM autonomous_trading_system/base:latest
-
-# Install specific dependencies
-RUN pip install --no-cache-dir \
-    alpaca-trade-api \
-    ccxt \
-    redis
-
-# Copy application code
-COPY --chown=appuser:appuser src/config /app/src/config
-COPY --chown=appuser:appuser src/utils /app/src/utils
-COPY --chown=appuser:appuser src/trading_strategy /app/src/trading_strategy
-
-# Copy startup script
-COPY --chown=appuser:appuser docker/trading_strategy/start.sh /app/start.sh
-RUN chmod +x /app/start.sh
-
-# Set entry point
-ENTRYPOINT ["/app/start.sh"]
+/app/
+├── src/
+│   ├── utils/
+│   │   ├── logging/
+│   │   ├── database/
+│   │   ├── metrics/
+│   │   └── time/
+│   ├── continuous_learning/
+│   │   ├── __init__.py
+│   │   ├── adaptation/
+│   │   │   ├── __init__.py
+│   │   │   └── strategy_adapter.py
+│   │   ├── analysis/
+│   │   │   ├── __init__.py
+│   │   │   └── performance_analyzer.py
+│   │   ├── pipeline/
+│   │   │   ├── __init__.py
+│   │   │   └── continuous_learning_pipeline.py
+│   │   └── retraining/
+│   │       ├── __init__.py
+│   │       └── model_retrainer.py
+│   └── main.py
+├── config/
+│   ├── logging.yaml
+│   └── continuous_learning_config.yaml
+└── logs/
+    └── continuous_learning.log
 ```
 
 ## Docker Compose Configuration
 
 ```yaml
-# File: autonomous_trading_system/docker-compose.yml
-
 version: '3.8'
 
 services:
-  # Database services
-  timescaledb:
-    image: timescale/timescaledb:latest-pg14
-    ports:
-      - "${TIMESCALEDB_PORT}:5432"
-    environment:
-      - POSTGRES_PASSWORD=${TIMESCALEDB_PASSWORD}
-      - POSTGRES_USER=${TIMESCALEDB_USER}
-      - POSTGRES_DB=${TIMESCALEDB_DATABASE}
-    volumes:
-      - timescaledb-data:/var/lib/postgresql/data
-      - ./docker/timescaledb/init:/docker-entrypoint-initdb.d
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${TIMESCALEDB_USER}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - trading_network
-
   # Core system services
   system-controller:
     build:
       context: .
       dockerfile: docker/system_controller/Dockerfile
-    image: autonomous_trading_system/system-controller:${VERSION:-latest}
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    env_file:
-      - .env
+    image: autonomous_trading_system/system-controller:${VERSION}
+    environment:
+      # Connect to existing TimescaleDB container
+      - TIMESCALEDB_HOST=${TIMESCALEDB_HOST}
+      - TIMESCALEDB_PORT=${TIMESCALEDB_PORT}
+      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
+      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
+      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL}
     volumes:
       - logs:/app/logs
       - ./config:/app/config
     restart: unless-stopped
     networks:
-      - trading_network
-      - monitoring_network
+      - default
+    external_links:
+      - timescaledb-v1-1
+      - model-training-tensorflow-v1-1
+      - feature-engineering-tensorflow-v1-1
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
 
   data-acquisition:
     build:
       context: .
       dockerfile: docker/data_acquisition/Dockerfile
-    image: autonomous_trading_system/data-acquisition:${VERSION:-latest}
+    image: autonomous_trading_system/data-acquisition:${VERSION}
     depends_on:
       - system-controller
-      - timescaledb
-    env_file:
-      - .env
+    environment:
+      # Connect to existing TimescaleDB container
+      - TIMESCALEDB_HOST=${TIMESCALEDB_HOST}
+      - TIMESCALEDB_PORT=${TIMESCALEDB_PORT}
+      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
+      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
+      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - UNUSUAL_WHALES_API_KEY=${UNUSUAL_WHALES_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL}
     volumes:
       - logs:/app/logs
       - ./config:/app/config
       - data:/app/data
     restart: unless-stopped
     networks:
-      - trading_network
-      - monitoring_network
-
-  feature-engineering:
-    build:
-      context: .
-      dockerfile: docker/feature_engineering/Dockerfile
-    image: autonomous_trading_system/feature-engineering:${VERSION:-latest}
-    depends_on:
-      - system-controller
-      - data-acquisition
-    env_file:
-      - .env
-    volumes:
-      - logs:/app/logs
-      - ./config:/app/config
-      - features:/app/features
-    restart: unless-stopped
-    networks:
-      - trading_network
-      - monitoring_network
-
-  model-training:
-    build:
-      context: .
-      dockerfile: docker/model_training/Dockerfile
-    image: autonomous_trading_system/model-training:${VERSION:-latest}
-    depends_on:
-      - system-controller
-      - feature-engineering
-    env_file:
-      - .env
-    volumes:
-      - logs:/app/logs
-      - ./config:/app/config
-      - models:/app/models
+      - default
+    external_links:
+      - timescaledb-v1-1
+      - feature-engineering-tensorflow-v1-1
     deploy:
       resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
-    networks:
-      - trading_network
-      - monitoring_network
+        limits:
+          cpus: '1.0'
+          memory: 1G
 
   trading-strategy:
     build:
       context: .
       dockerfile: docker/trading_strategy/Dockerfile
-    image: autonomous_trading_system/trading-strategy:${VERSION:-latest}
+    image: autonomous_trading_system/trading-strategy:${VERSION}
     depends_on:
       - system-controller
-      - model-training
-    env_file:
-      - .env
+      - data-acquisition
+    environment:
+      # Connect to existing TimescaleDB container
+      - TIMESCALEDB_HOST=${TIMESCALEDB_HOST}
+      - TIMESCALEDB_PORT=${TIMESCALEDB_PORT}
+      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
+      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
+      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - ALPACA_API_BASE_URL=${ALPACA_API_BASE_URL}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - MAX_POSITION_SIZE=${MAX_POSITION_SIZE}
+      - RISK_PERCENTAGE=${RISK_PERCENTAGE}
+      - MAX_POSITIONS=${MAX_POSITIONS}
     volumes:
       - logs:/app/logs
       - ./config:/app/config
     restart: unless-stopped
     networks:
-      - trading_network
-      - monitoring_network
-
-networks:
-  trading_network:
-    driver: bridge
-    internal: true  # No external access
-  monitoring_network:
-    driver: bridge
+      - default
+    external_links:
+      - timescaledb-v1-1
+      - model-training-tensorflow-v1-1
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
 
 volumes:
-  timescaledb-data:
   logs:
   data:
-  features:
-  models:
 ```
 
-## Component Startup Scripts
+## Dockerfile Configurations
 
-### 1. System Controller Startup Script
+### 1. System Controller Dockerfile
+```dockerfile
+FROM nvcr.io/nvidia/tensorflow:24.02-tf2-py3
 
+ENV PYTHONUNBUFFERED=1 \
+    TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN groupadd -g 1000 appuser && \
+    useradd -r -u 1000 -g appuser appuser && \
+    chown -R appuser:appuser /app
+
+COPY --chown=appuser:appuser src/utils /app/src/utils
+COPY --chown=appuser:appuser src/system_controller /app/src/system_controller
+COPY --chown=appuser:appuser docker/system_controller/start.sh /app/start.sh
+
+USER appuser
+
+CMD ["/app/start.sh"]
+```
+
+### 2. Data Acquisition Dockerfile
+```dockerfile
+FROM nvcr.io/nvidia/tensorflow:24.02-tf2-py3
+
+ENV PYTHONUNBUFFERED=1 \
+    TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN groupadd -g 1000 appuser && \
+    useradd -r -u 1000 -g appuser appuser && \
+    chown -R appuser:appuser /app
+
+COPY --chown=appuser:appuser src/utils /app/src/utils
+COPY --chown=appuser:appuser src/data_acquisition /app/src/data_acquisition
+COPY --chown=appuser:appuser docker/data_acquisition/start.sh /app/start.sh
+
+USER appuser
+
+CMD ["/app/start.sh"]
+```
+
+### 3. Trading Strategy Dockerfile
+```dockerfile
+FROM nvcr.io/nvidia/tensorflow:24.02-tf2-py3
+
+ENV PYTHONUNBUFFERED=1 \
+    TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN groupadd -g 1000 appuser && \
+    useradd -r -u 1000 -g appuser appuser && \
+    chown -R appuser:appuser /app
+
+COPY --chown=appuser:appuser src/utils /app/src/utils
+COPY --chown=appuser:appuser src/trading_strategy /app/src/trading_strategy
+COPY --chown=appuser:appuser docker/trading_strategy/start.sh /app/start.sh
+
+USER appuser
+
+CMD ["/app/start.sh"]
+```
+
+### 4. Model Training Dockerfile
+```dockerfile
+FROM nvcr.io/nvidia/tensorflow:24.02-tf2-py3
+
+ENV PYTHONUNBUFFERED=1 \
+    TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN groupadd -g 1000 appuser && \
+    useradd -r -u 1000 -g appuser appuser && \
+    chown -R appuser:appuser /app
+
+COPY --chown=appuser:appuser src/utils /app/src/utils
+COPY --chown=appuser:appuser src/model_training /app/src/model_training
+COPY --chown=appuser:appuser docker/model_training/start.sh /app/start.sh
+
+USER appuser
+
+CMD ["/app/start.sh"]
+```
+
+### 5. Feature Engineering Dockerfile
+```dockerfile
+FROM nvcr.io/nvidia/tensorflow:24.02-tf2-py3
+
+ENV PYTHONUNBUFFERED=1 \
+    TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN groupadd -g 1000 appuser && \
+    useradd -r -u 1000 -g appuser appuser && \
+    chown -R appuser:appuser /app
+
+COPY --chown=appuser:appuser src/utils /app/src/utils
+COPY --chown=appuser:appuser src/feature_engineering /app/src/feature_engineering
+COPY --chown=appuser:appuser docker/feature_engineering/start.sh /app/start.sh
+
+USER appuser
+
+CMD ["/app/start.sh"]
+```
+
+### 6. Continuous Learning Dockerfile
+```dockerfile
+FROM nvcr.io/nvidia/tensorflow:24.02-tf2-py3
+
+ENV PYTHONUNBUFFERED=1 \
+    TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN groupadd -g 1000 appuser && \
+    useradd -r -u 1000 -g appuser appuser && \
+    chown -R appuser:appuser /app
+
+COPY --chown=appuser:appuser src/utils /app/src/utils
+COPY --chown=appuser:appuser src/continuous_learning /app/src/continuous_learning
+COPY --chown=appuser:appuser docker/continuous_learning/start.sh /app/start.sh
+
+USER appuser
+
+CMD ["/app/start.sh"]
+```
+
+## Startup Scripts
+
+### 1. System Controller Start Script
 ```bash
 #!/bin/bash
-# File: autonomous_trading_system/docker/system_controller/start.sh
+# docker/system_controller/start.sh
 
-# Wait for TimescaleDB to be ready
-echo "Waiting for TimescaleDB..."
+# Wait for TimescaleDB with timeout and backoff
+MAX_RETRIES=30
+RETRY_INTERVAL=2
+RETRY_COUNT=0
+
 until PGPASSWORD=$TIMESCALEDB_PASSWORD psql -h $TIMESCALEDB_HOST -U $TIMESCALEDB_USER -d $TIMESCALEDB_DATABASE -c '\q'; do
-  echo "TimescaleDB is unavailable - sleeping"
-  sleep 1
+    RETRY_COUNT=$((RETRY_COUNT+1))
+    if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+        echo "Failed to connect to TimescaleDB after $MAX_RETRIES attempts. Exiting."
+        exit 1
+    fi
+    echo "Waiting for TimescaleDB... (Attempt $RETRY_COUNT/$MAX_RETRIES)"
+    sleep $RETRY_INTERVAL
+    # Exponential backoff
+    RETRY_INTERVAL=$((RETRY_INTERVAL*2))
+    if [ $RETRY_INTERVAL -gt 30 ]; then
+        RETRY_INTERVAL=30
+    fi
 done
-
-echo "TimescaleDB is up - starting System Controller"
 
 # Start the system controller
-python -m src.system_controller.main
+exec python -m src.system_controller.main
 ```
 
-### 2. Data Acquisition Startup Script
-
+### 2. Data Acquisition Start Script
 ```bash
 #!/bin/bash
-# File: autonomous_trading_system/docker/data_acquisition/start.sh
+# docker/data_acquisition/start.sh
 
-# Wait for System Controller to be ready
-echo "Waiting for System Controller..."
+# Wait for System Controller with timeout and backoff
+MAX_RETRIES=30
+RETRY_INTERVAL=2
+RETRY_COUNT=0
+
 until curl -s http://system-controller:8000/health > /dev/null; do
-  echo "System Controller is unavailable - sleeping"
-  sleep 1
+    RETRY_COUNT=$((RETRY_COUNT+1))
+    if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+        echo "Failed to connect to System Controller after $MAX_RETRIES attempts. Exiting."
+        exit 1
+    fi
+    echo "Waiting for System Controller... (Attempt $RETRY_COUNT/$MAX_RETRIES)"
+    sleep $RETRY_INTERVAL
+    # Exponential backoff
+    RETRY_INTERVAL=$((RETRY_INTERVAL*2))
+    if [ $RETRY_INTERVAL -gt 30 ]; then
+        RETRY_INTERVAL=30
+    fi
 done
-
-echo "System Controller is up - starting Data Acquisition"
 
 # Start the data acquisition service
-python -m src.data_acquisition.main
+exec python -m src.data_acquisition.main
 ```
 
-### 3. Feature Engineering Startup Script
-
+### 3. Trading Strategy Start Script
 ```bash
 #!/bin/bash
-# File: autonomous_trading_system/docker/feature_engineering/start.sh
+# docker/trading_strategy/start.sh
 
-# Wait for Data Acquisition to be ready
-echo "Waiting for Data Acquisition..."
+# Wait for Data Acquisition with timeout and backoff
+MAX_RETRIES=30
+RETRY_INTERVAL=2
+RETRY_COUNT=0
+
 until curl -s http://data-acquisition:8001/health > /dev/null; do
-  echo "Data Acquisition is unavailable - sleeping"
-  sleep 1
+    RETRY_COUNT=$((RETRY_COUNT+1))
+    if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+        echo "Failed to connect to Data Acquisition after $MAX_RETRIES attempts. Exiting."
+        exit 1
+    fi
+    echo "Waiting for Data Acquisition... (Attempt $RETRY_COUNT/$MAX_RETRIES)"
+    sleep $RETRY_INTERVAL
+    # Exponential backoff
+    RETRY_INTERVAL=$((RETRY_INTERVAL*2))
+    if [ $RETRY_INTERVAL -gt 30 ]; then
+        RETRY_INTERVAL=30
+    fi
 done
-
-echo "Data Acquisition is up - starting Feature Engineering"
-
-# Start the feature engineering service
-python -m src.feature_engineering.main
-```
-
-### 4. Model Training Startup Script
-
-```bash
-#!/bin/bash
-# File: autonomous_trading_system/docker/model_training/start.sh
-
-# Wait for Feature Engineering to be ready
-echo "Waiting for Feature Engineering..."
-until curl -s http://feature-engineering:8002/health > /dev/null; do
-  echo "Feature Engineering is unavailable - sleeping"
-  sleep 1
-done
-
-echo "Feature Engineering is up - starting Model Training"
-
-# Configure GPU settings if enabled
-if [ "$GPU_ENABLED" = "true" ]; then
-  echo "GPU is enabled - configuring GPU settings"
-  nvidia-smi
-fi
-
-# Start the model training service
-python -m src.model_training.main
-```
-
-### 5. Trading Strategy Startup Script
-
-```bash
-#!/bin/bash
-# File: autonomous_trading_system/docker/trading_strategy/start.sh
-
-# Wait for Model Training to be ready
-echo "Waiting for Model Training..."
-until curl -s http://model-training:8003/health > /dev/null; do
-  echo "Model Training is unavailable - sleeping"
-  sleep 1
-done
-
-echo "Model Training is up - starting Trading Strategy"
 
 # Start the trading strategy service
-python -m src.trading_strategy.main
+exec python -m src.trading_strategy.main
 ```
 
-## System Management Scripts
+## Configuration Files
 
-### 1. System Startup Script
-
-```bash
-#!/bin/bash
-# File: autonomous_trading_system/scripts/start_system.sh
-
-# Load environment variables
-source .env
-
-# Start the system with Docker Compose
-docker-compose up -d
-
-# Wait for all services to be healthy
-echo "Waiting for all services to be healthy..."
-sleep 10
-
-# Check system status
-docker-compose ps
-
-echo "System started successfully"
+### 1. Logging Configuration
+```yaml
+# config/logging.yaml
+version: 1
+formatters:
+  standard:
+    format: '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: standard
+    stream: ext://sys.stdout
+  file:
+    class: logging.FileHandler
+    formatter: standard
+    filename: /app/logs/service.log
+root:
+  level: INFO
+  handlers: [console, file]
 ```
 
-### 2. System Shutdown Script
-
-```bash
-#!/bin/bash
-# File: autonomous_trading_system/scripts/stop_system.sh
-
-# Gracefully stop the system
-docker-compose down
-
-echo "System stopped successfully"
+### 2. System Configuration
+```yaml
+# config/system_config.yaml
+system:
+  health_check_interval: 10
+  metrics_port: 8000
+database:
+  max_connections: 20
+  connection_timeout: 5
+  retry_attempts: 3
+monitoring:
+  metrics_enabled: true
+  log_level: INFO
 ```
 
-### 3. System Status Script
+## External Dependencies
 
-```bash
-#!/bin/bash
-# File: autonomous_trading_system/scripts/system_status.sh
+### 1. TimescaleDB Integration
+The system relies on an external TimescaleDB instance (`timescaledb-v1-1`) for time-series data storage. This approach offers several advantages:
 
-# Check system status
-docker-compose ps
+- **Separation of Concerns**: Database management is handled independently from the application containers
+- **Scalability**: The database can be scaled independently based on storage and performance needs
+- **Persistence**: Data persists beyond the lifecycle of application containers
+- **Backup Management**: Database backups can be managed separately from application deployments
 
-# Check logs for errors
-echo "Recent errors:"
-docker-compose logs --tail=100 | grep -i error
-
-# Check resource usage
-echo "Resource usage:"
-docker stats --no-stream
+Connection details are provided via environment variables:
+```
+TIMESCALEDB_HOST
+TIMESCALEDB_PORT
+TIMESCALEDB_DATABASE
+TIMESCALEDB_USER
+TIMESCALEDB_PASSWORD
 ```
 
-### 4. Database Backup Script
+### 2. Model Training Integration
+The Model Training service (`model-training-tensorflow-v1-1`) is referenced by the System Controller and Trading Strategy containers. This service:
 
-```bash
-#!/bin/bash
-# File: autonomous_trading_system/scripts/backup_database.sh
+- Trains machine learning models using historical market data
+- Manages model versioning and deployment
+- Provides inference endpoints for real-time predictions
+- Handles model validation and performance monitoring
 
-# Load environment variables
-source .env
+### 3. Feature Engineering Integration
+The Feature Engineering service (`feature-engineering-tensorflow-v1-1`) is referenced by the System Controller and Data Acquisition containers. This service:
 
-# Set backup parameters
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_DIR="./backups/database"
-BACKUP_FILE="timescaledb_backup_${TIMESTAMP}.dump"
+- Processes raw market data into meaningful features
+- Manages feature storage and retrieval
+- Provides feature transformation pipelines
+- Handles feature validation and quality monitoring
 
-# Create backup directory if it doesn't exist
-mkdir -p ${BACKUP_DIR}
+## Network Configuration
 
-# Perform backup
-echo "Backing up TimescaleDB..."
-docker-compose exec -T timescaledb pg_dump -U ${TIMESCALEDB_USER} -d ${TIMESCALEDB_DATABASE} -F c -f /tmp/${BACKUP_FILE}
-docker cp $(docker-compose ps -q timescaledb):/tmp/${BACKUP_FILE} ${BACKUP_DIR}/${BACKUP_FILE}
+### 1. Service Discovery and Communication
+The system uses Docker's built-in DNS for service discovery. Each container can communicate with others using their service names:
 
-# Check backup status
-if [ $? -eq 0 ]; then
-  echo "Backup completed successfully: ${BACKUP_FILE}"
-  
-  # Clean up old backups (keep last 7 days)
-  find ${BACKUP_DIR} -name "timescaledb_backup_*.dump" -mtime +7 -delete
-else
-  echo "Backup failed!"
-  exit 1
-fi
-```
+- `system-controller:8000` - System Controller API
+- `data-acquisition:8001` - Data Acquisition API
+- `trading-strategy:8002` - Trading Strategy API
+- `timescaledb-v1-1:5432` - TimescaleDB
+- `model-training-tensorflow-v1-1:8003` - Model Training API
+- `feature-engineering-tensorflow-v1-1:8004` - Feature Engineering API
 
-### 5. Model Backup Script
+### 2. Port Exposure
+The following ports are exposed for external communication:
 
-```bash
-#!/bin/bash
-# File: autonomous_trading_system/scripts/backup_models.sh
+- `8000` - System Controller API (health checks, metrics, system status)
+- `8001` - Data Acquisition API (data collection status, metrics)
+- `8002` - Trading Strategy API (trading status, position information)
+- `8003` - Model Training API (model status, training metrics)
+- `8004` - Feature Engineering API (feature status, transformation metrics)
 
-# Set backup parameters
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_DIR="./backups/models"
-MODEL_VOLUME="autonomous_trading_system_models"
+### 3. Network Security
+All inter-container communication occurs on a private Docker network. Only necessary ports are exposed to the host system. For production deployment, consider implementing:
 
-# Create backup directory if it doesn't exist
-mkdir -p ${BACKUP_DIR}
+- Network policies to restrict container-to-container communication
+- TLS encryption for all API endpoints
+- API authentication for sensitive endpoints
+- Rate limiting to prevent abuse
 
-# Perform backup
-echo "Backing up models..."
-docker run --rm -v ${MODEL_VOLUME}:/models -v $(pwd)/${BACKUP_DIR}:/backup \
-  alpine tar -czf /backup/models_backup_${TIMESTAMP}.tar.gz /models
+## Resource Allocation
 
-# Check backup status
-if [ $? -eq 0 ]; then
-  echo "Model backup completed successfully: models_backup_${TIMESTAMP}.tar.gz"
-  
-  # Clean up old backups (keep last 7 days)
-  find ${BACKUP_DIR} -name "models_backup_*.tar.gz" -mtime +7 -delete
-else
-  echo "Model backup failed!"
-  exit 1
-fi
-```
+### 1. Container Resource Limits
+Each container has resource limits defined to ensure fair resource allocation and prevent any single container from consuming all available resources:
 
-## TimescaleDB Initialization Script
+- **System Controller**: 1.0 CPU, 1G memory
+- **Data Acquisition**: 1.0 CPU, 1G memory
+- **Trading Strategy**: 1.0 CPU, 1G memory
+- **Model Training**: 2.0 CPU, 4G memory, 1 GPU
+- **Feature Engineering**: 1.0 CPU, 2G memory
+- **Continuous Learning**: 1.0 CPU, 2G memory
 
-```sql
--- File: autonomous_trading_system/docker/timescaledb/init/init.sql
+### 2. Scaling Considerations
+For production deployment, consider implementing:
 
--- Create extensions
-CREATE EXTENSION IF NOT EXISTS timescaledb;
-CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+- Horizontal scaling for Data Acquisition to handle increased data volume
+- Vertical scaling for Model Training to accommodate more complex models
+- Load balancing for API endpoints to distribute traffic
+- Auto-scaling based on resource utilization metrics
 
--- Create stock_aggs table
-CREATE TABLE IF NOT EXISTS stock_aggs (
-    symbol TEXT NOT NULL,
-    timestamp TIMESTAMPTZ NOT NULL,
-    open NUMERIC NOT NULL,
-    high NUMERIC NOT NULL,
-    low NUMERIC NOT NULL,
-    close NUMERIC NOT NULL,
-    volume NUMERIC NOT NULL,
-    timeframe TEXT NOT NULL,
-    source TEXT,
-    CONSTRAINT stock_aggs_pkey PRIMARY KEY (symbol, timestamp, timeframe)
-);
+## Data Persistence Strategy
 
--- Create hypertable for time partitioning
-SELECT create_hypertable('stock_aggs', 'timestamp', if_not_exists => TRUE);
+### 1. Volume Management
+The system uses Docker volumes for data persistence:
 
--- Create index for symbol-based queries
-CREATE INDEX IF NOT EXISTS idx_stock_aggs_symbol ON stock_aggs (symbol, timeframe, timestamp DESC);
+- `timescaledb-data`: Stores TimescaleDB data files
+- `logs`: Stores application logs from all containers
+- `data`: Stores intermediate data files and cached data
 
--- Create features table
-CREATE TABLE IF NOT EXISTS features (
-    symbol TEXT NOT NULL,
-    timestamp TIMESTAMPTZ NOT NULL,
-    feature_name TEXT NOT NULL,
-    value NUMERIC NOT NULL,
-    timeframe TEXT NOT NULL,
-    feature_group TEXT,
-    CONSTRAINT features_pkey PRIMARY KEY (symbol, timestamp, feature_name, timeframe)
-);
+### 2. Backup Strategy
+Implement the following backup procedures:
 
--- Create hypertable for time partitioning
-SELECT create_hypertable('features', 'timestamp', if_not_exists => TRUE);
+- **TimescaleDB Backups**:
+  - Daily full backups using `pg_dump`
+  - Continuous WAL archiving for point-in-time recovery
+  - Backup verification and restoration testing
 
--- Create index for symbol-based queries
-CREATE INDEX IF NOT EXISTS idx_features_symbol ON features (symbol, feature_group, timeframe, timestamp DESC);
+- **Model Artifacts**:
+  - Regular backups of trained models
+  - Version control for model configurations
+  - Backup of training datasets
 
--- Create positions table
-CREATE TABLE IF NOT EXISTS positions (
-    position_id TEXT PRIMARY KEY,
-    symbol TEXT NOT NULL,
-    entry_price NUMERIC NOT NULL,
-    stop_price NUMERIC,
-    target_price NUMERIC,
-    shares NUMERIC NOT NULL,
-    position_value NUMERIC NOT NULL,
-    risk_amount NUMERIC NOT NULL,
-    entry_time TIMESTAMPTZ NOT NULL,
-    exit_time TIMESTAMPTZ,
-    exit_price NUMERIC,
-    profit_loss NUMERIC,
-    status TEXT NOT NULL,
-    strategy TEXT NOT NULL,
-    conviction_score NUMERIC,
-    signal_strength NUMERIC,
-    notes TEXT
-);
+- **Configuration Backups**:
+  - Version control for all configuration files
+  - Backup of environment variables and secrets
 
--- Create index for symbol-based queries
-CREATE INDEX IF NOT EXISTS idx_positions_symbol ON positions (symbol);
+### 3. Retention Policy
+Implement data retention policies:
 
--- Create index for status-based queries
-CREATE INDEX IF NOT EXISTS idx_positions_status ON positions (status);
+- Raw market data: 90 days
+- Processed features: 1 year
+- Trading signals and decisions: 3 years
+- Performance metrics: 5 years
+- System logs: 30 days
 
--- Create model_registry table
-CREATE TABLE IF NOT EXISTS model_registry (
-    model_id TEXT PRIMARY KEY,
-    model_type TEXT NOT NULL,
-    timeframe TEXT NOT NULL,
-    trained_at TIMESTAMPTZ NOT NULL,
-    metrics JSONB NOT NULL,
-    hyperparameters JSONB NOT NULL,
-    features_used JSONB NOT NULL,
-    version TEXT NOT NULL,
-    status TEXT NOT NULL,
-    file_path TEXT,
-    performance_history JSONB
-);
+## Implementation Notes
 
--- Create index for model type and timeframe queries
-CREATE INDEX IF NOT EXISTS idx_model_registry_type_timeframe ON model_registry (model_type, timeframe);
-```
+1. File Organization:
+   - Each container has a clear, modular structure
+   - Shared utilities are copied to each container
+   - Configuration files are mounted as read-only
+   - Logs are persisted in a shared volume
 
-## Benefits of This Containerization Strategy
+2. Dependencies:
+   - Each container includes only necessary dependencies
+   - Shared utilities prevent code duplication
+   - Clear separation of concerns between services
 
-1. **Maximum Flexibility**: Each component is containerized separately, allowing for independent scaling, deployment, and updates.
+3. Security:
+   - Non-root user for all containers
+   - Read-only configuration mounts
+   - Environment variables for secrets
+   - Minimal system dependencies
 
-2. **Environment Isolation**: Each component has its own dependencies and runtime environment, preventing conflicts.
+4. Monitoring:
+   - Centralized logging
+   - Health check endpoints
+   - Basic metrics collection
+   - Resource usage monitoring
 
-3. **Resource Optimization**: GPU resources are allocated only to components that need them (Model Training).
-
-4. **Simplified Deployment**: Docker Compose orchestrates the entire system, making deployment straightforward.
-
-5. **Configuration Management**: Environment variables and configuration files are centralized and easily managed.
-
-6. **Monitoring and Logging**: Consistent logging and monitoring across all components.
-
-7. **Scalability**: Components can be scaled independently based on workload requirements.
-
-8. **Maintainability**: Clear separation of concerns makes the system easier to maintain and update.
-
-## Implementation Steps
-
-1. Create the directory structure as outlined above
-2. Create the Dockerfiles for each component
-3. Create the Docker Compose configuration
-4. Create the startup scripts for each component
-5. Create the system management scripts
-6. Create the TimescaleDB initialization script
-7. Test the containerization strategy in a staging environment
-8. Deploy to production
-
-## Security Considerations
-
-1. **API Keys**: Store API keys in environment variables, not in code
-2. **Network Isolation**: Use Docker networks to isolate components
-3. **Non-Root Users**: Run containers as non-root users
-4. **Secrets Management**: Use Docker secrets for sensitive information
-5. **Regular Updates**: Keep base images and dependencies updated
-6. **Vulnerability Scanning**: Regularly scan images for vulnerabilities
+5. Deployment:
+   - Simple service startup
+   - Clear dependency chain
+   - Resource limits
+   - Automatic restarts

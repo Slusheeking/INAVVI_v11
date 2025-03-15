@@ -5,7 +5,7 @@ This package contains components for retraining machine learning models based on
 and performance feedback, enabling the system to adapt to changing market conditions.
 """
 
-from src.utils.logging.logger import get_logger
+from src.utils.logging import get_logger
 from src.continuous_learning.retraining.model_retrainer import ModelRetrainer
 
 # Set up logger for this module

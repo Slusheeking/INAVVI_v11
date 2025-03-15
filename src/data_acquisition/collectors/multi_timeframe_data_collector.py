@@ -4,7 +4,6 @@ Multi-Timeframe Data Collector
 This module provides a collector for gathering market data across multiple timeframes in parallel.
 """
 
-import logging
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
@@ -16,8 +15,11 @@ from src.data_acquisition.api.unusual_whales_client import UnusualWhalesClient
 import pandas as pd
 import numpy as np
 
+# Import logging utility
+from src.utils.logging import get_logger
+
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger("data_acquisition.collectors.multi_timeframe_data_collector")
 
 
 class MultiTimeframeDataCollector:

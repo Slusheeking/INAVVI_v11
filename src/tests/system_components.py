@@ -9,7 +9,6 @@ TimescaleDBManager, and GPU configuration functions.
 import os
 import json
 import time
-import logging
 import threading
 import copy
 import numpy as np

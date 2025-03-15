@@ -18,19 +18,23 @@ Capabilities:
 - Clock
 """
 
-import logging
 import os
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict, Optional
 
 from alpaca_trade_api.rest import REST
 from alpaca_trade_api.stream import Stream
 from dotenv import load_dotenv
 
+from src.utils.api.api_utils import AlpacaAPIClient
+from src.utils.logging import get_logger
+from src.utils.time.market_hours import get_market_status
+from src.utils.time.time_utils import now
+
 # Load environment variables
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+logger = get_logger("trading_strategy.alpaca.alpaca_client")
 
 
 class AlpacaClient:
@@ -38,9 +42,11 @@ class AlpacaClient:
 
     def __init__(
         self,
-        api_key: str | None = None,
-        api_secret: str | None = None,
-        base_url: str | None = None,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+        base_url: Optional[str] = None,
+        data_url: Optional[str] = None,
+        use_api_utils: bool = True,
     ):
         """
         Initialize the Alpaca API client.
@@ -48,18 +54,38 @@ class AlpacaClient:
         Args:
             api_key: Alpaca API key (defaults to ALPACA_API_KEY environment variable)
             api_secret: Alpaca API secret (defaults to ALPACA_API_SECRET environment variable)
-            base_url: Alpaca API base URL (defaults to ALPACA_API_ENDPOINT environment variable)
+            base_url: Alpaca API base URL (defaults to ALPACA_API_BASE_URL environment variable)
+            data_url: Alpaca Data API URL (defaults to ALPACA_DATA_URL environment variable)
+            use_api_utils: Whether to use the AlpacaAPIClient from api_utils (recommended)
         """
         self.api_key = api_key or os.getenv("ALPACA_API_KEY")
         self.api_secret = api_secret or os.getenv("ALPACA_API_SECRET")
         self.base_url = base_url or os.getenv(
             "ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets"
         )
+        self.data_url = data_url or os.getenv(
+            "ALPACA_DATA_URL", "https://data.alpaca.markets"
+        )
 
         if not self.api_key or not self.api_secret:
             raise ValueError("Alpaca API key and secret are required")
 
-        # Initialize REST API client
+        # Initialize API clients
+        if use_api_utils:
+            # Use the enhanced AlpacaAPIClient from api_utils
+            self.api_client = AlpacaAPIClient(
+                api_key=self.api_key,
+                api_secret=self.api_secret,
+                base_url=self.base_url,
+                data_url=self.data_url
+            )
+            logger.info("Using enhanced AlpacaAPIClient with rate limiting and retry logic")
+        else:
+            # Use the standard Alpaca REST API client
+            self.api_client = None
+            logger.info("Using standard Alpaca REST API client")
+
+        # Initialize REST API client (for backward compatibility)
         self.api = REST(
             key_id=self.api_key, secret_key=self.api_secret, base_url=self.base_url
         )
@@ -73,7 +99,7 @@ class AlpacaClient:
         )
 
     # Account Information
-    def get_account(self) -> dict[str, Any]:
+    def get_account(self) -> Dict[str, Any]:
         """
         Get account information.
 
@@ -81,23 +107,29 @@ class AlpacaClient:
             Dictionary with account information
         """
         try:
-            account = self.api.get_account()
-            return {
-                "id": account.id,
-                "status": account.status,
-                "equity": float(account.equity),
-                "cash": float(account.cash),
-                "buying_power": float(account.buying_power),
-                "long_market_value": float(account.long_market_value),
-                "short_market_value": float(account.short_market_value),
-                "initial_margin": float(account.initial_margin),
-                "maintenance_margin": float(account.maintenance_margin),
-                "last_equity": float(account.last_equity),
-                "daytrade_count": account.daytrade_count,
-                "last_maintenance_margin": float(account.last_maintenance_margin),
-                "daytrading_buying_power": float(account.daytrading_buying_power),
-                "regt_buying_power": float(account.regt_buying_power),
-            }
+            if self.api_client:
+                # Use the enhanced API client
+                account_data = self.api_client.get_account()
+                return account_data
+            else:
+                # Use the standard API client
+                account = self.api.get_account()
+                return {
+                    "id": account.id,
+                    "status": account.status,
+                    "equity": float(account.equity),
+                    "cash": float(account.cash),
+                    "buying_power": float(account.buying_power),
+                    "long_market_value": float(account.long_market_value),
+                    "short_market_value": float(account.short_market_value),
+                    "initial_margin": float(account.initial_margin),
+                    "maintenance_margin": float(account.maintenance_margin),
+                    "last_equity": float(account.last_equity),
+                    "daytrade_count": account.daytrade_count,
+                    "last_maintenance_margin": float(account.last_maintenance_margin),
+                    "daytrading_buying_power": float(account.daytrading_buying_power),
+                    "regt_buying_power": float(account.regt_buying_power),
+                }
         except Exception as e:
             logger.error(f"Error getting account information: {e}")
             raise
@@ -438,7 +470,7 @@ class AlpacaClient:
             raise
 
     # Market Clock
-    def get_clock(self) -> dict[str, Any]:
+    def get_clock(self) -> Dict[str, Any]:
         """
         Get market clock information.
 
@@ -446,13 +478,31 @@ class AlpacaClient:
             Dictionary with market clock information
         """
         try:
-            clock = self.api.get_clock()
-            return {
-                "timestamp": clock.timestamp,
-                "is_open": clock.is_open,
-                "next_open": clock.next_open,
-                "next_close": clock.next_close,
-            }
+            if self.api_client:
+                # Use the enhanced API client
+                clock_data = self.api_client.get_clock()
+                
+                # Add market status information
+                current_time = now()
+                market_status = get_market_status(current_time)
+                clock_data["market_status"] = market_status.value
+                
+                return clock_data
+            else:
+                # Use the standard API client
+                clock = self.api.get_clock()
+                
+                # Get market status
+                current_time = now()
+                market_status = get_market_status(current_time)
+                
+                return {
+                    "timestamp": clock.timestamp,
+                    "is_open": clock.is_open,
+                    "next_open": clock.next_open,
+                    "next_close": clock.next_close,
+                    "market_status": market_status.value
+                }
         except Exception as e:
             logger.error(f"Error getting market clock: {e}")
             raise
@@ -865,5 +915,11 @@ class AlpacaClient:
         
         This method should be called when the client is no longer needed.
         """
+        # Close standard API client
         self.api._session.close()
+        
+        # Close enhanced API client if available
+        if self.api_client:
+            self.api_client.close()
+            
         logger.info("AlpacaClient resources released")

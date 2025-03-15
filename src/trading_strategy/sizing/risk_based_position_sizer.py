@@ -6,11 +6,12 @@ based on risk parameters, including the 2% risk rule, ATR-based stops, and volat
 adjustments.
 """
 
-import logging
 import math
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger
+
+logger = get_logger("trading_strategy.sizing.risk_based_position_sizer")
 
 
 class RiskBasedPositionSizer:

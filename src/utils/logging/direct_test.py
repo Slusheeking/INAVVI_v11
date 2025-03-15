@@ -12,7 +12,13 @@ from datetime import datetime
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 
-from src.utils.logging.logger import setup_logger, log_to_file, LOG_DIR
+import os
+from src.utils.logging import setup_logger, log_to_file
+
+# Get the project root directory (should be /home/ubuntu/INAVVI_v11-1)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../..'))
+# Ensure we're using the correct logs directory at the project root, not in src/logs
+LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
 
 def direct_test():
     """

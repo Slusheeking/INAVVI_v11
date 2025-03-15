@@ -1,0 +1,154 @@
+# Continuous Learning Configuration
+
+# General settings
+general:
+  model_registry_path: /app/models/registry
+  backtest_data_path: /app/data/backtest
+  backtest_results_path: /app/results/backtest
+  random_seed: 42
+
+# Monitoring settings
+monitoring:
+  # How often to check model performance (in hours)
+  check_interval: 24
+  
+  # Performance metrics to monitor
+  metrics:
+    - name: sharpe_ratio
+      threshold: 1.0
+      direction: above
+      weight: 0.3
+    
+    - name: max_drawdown
+      threshold: 0.15
+      direction: below
+      weight: 0.2
+    
+    - name: win_rate
+      threshold: 0.55
+      direction: above
+      weight: 0.2
+    
+    - name: profit_factor
+      threshold: 1.5
+      direction: above
+      weight: 0.2
+    
+    - name: expectancy
+      threshold: 0.1
+      direction: above
+      weight: 0.1
+  
+  # Composite score threshold for retraining
+  composite_score_threshold: 0.7
+  
+  # Minimum number of trades required for evaluation
+  min_trades_for_evaluation: 30
+  
+  # Lookback period for performance evaluation (in days)
+  performance_lookback_days: 30
+
+# Retraining settings
+retraining:
+  # Trigger conditions (any of these will trigger retraining)
+  triggers:
+    - performance_below_threshold
+    - market_regime_change
+    - data_drift_detected
+    - scheduled_interval
+  
+  # Scheduled retraining interval (in days)
+  scheduled_interval_days: 30
+  
+  # Maximum number of model versions to keep
+  max_model_versions: 5
+  
+  # Hyperparameter optimization settings
+  hyperparameter_optimization:
+    enabled: true
+    method: optuna
+    n_trials: 50
+    timeout: 3600  # seconds
+    pruning: true
+  
+  # Data settings for retraining
+  data:
+    train_lookback_days: 365
+    validation_lookback_days: 30
+    test_lookback_days: 30
+    include_recent_data: true
+
+# Market regime detection
+market_regime:
+  detection_method: hmm  # Hidden Markov Model
+  n_regimes: 3
+  features:
+    - volatility_20d
+    - trend_20d
+    - volume_ratio_20d
+  lookback_days: 90
+  update_frequency_days: 7
+
+# Data drift detection
+data_drift:
+  detection_method: kolmogorov_smirnov
+  reference_window_days: 30
+  current_window_days: 7
+  threshold: 0.05
+  features_to_monitor:
+    - close_returns
+    - volume
+    - volatility
+  check_frequency_days: 1
+
+# Adaptation strategies
+adaptation:
+  strategies:
+    - name: model_retraining
+      description: Retrain model with recent data
+      priority: 1
+    
+    - name: ensemble_update
+      description: Update ensemble weights based on recent performance
+      priority: 2
+    
+    - name: hyperparameter_tuning
+      description: Fine-tune hyperparameters without full retraining
+      priority: 3
+    
+    - name: feature_selection
+      description: Update feature selection based on importance
+      priority: 4
+  
+  # Ensemble settings
+  ensemble:
+    enabled: true
+    methods:
+      - voting
+      - stacking
+    base_models:
+      - lstm
+      - xgboost
+      - cnn
+    weight_update_strategy: performance_based
+
+# Backtesting settings for evaluation
+backtesting:
+  # Backtesting engine settings
+  engine: backtrader
+  commission: 0.001
+  slippage: 0.001
+  
+  # Position sizing
+  position_sizing:
+    method: risk_based
+    risk_per_trade: 0.02
+    max_position_size: 0.1
+  
+  # Risk management
+  risk_management:
+    stop_loss: 0.02
+    take_profit: 0.04
+    trailing_stop: true
+    trailing_stop_activation: 0.01
+    trailing_stop_distance: 0.015

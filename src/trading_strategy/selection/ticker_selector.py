@@ -5,17 +5,14 @@ This module provides functionality for selecting tickers based on various criter
 such as market cap, volume, and volatility.
 """
 
-import logging
 from typing import List, Optional
-
-
-
 import os
 
 from src.data_acquisition.api.polygon_client import PolygonClient
 from src.data_acquisition.api.unusual_whales_client import UnusualWhalesClient
+from src.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("trading_strategy.selection.ticker_selector")
 
 class TickerSelector:
     """Class for selecting tickers based on various criteria."""

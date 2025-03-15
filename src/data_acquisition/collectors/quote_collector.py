@@ -4,7 +4,6 @@ Quote Data Collector
 This module provides a collector for gathering quote data from various sources.
 """
 
-import logging
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
@@ -18,8 +17,11 @@ from src.data_acquisition.api.polygon_client import (
     PolygonClient
 )
 
+# Import logging utility
+from src.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+# Set up logger
+logger = get_logger("data_acquisition.collectors.quote_collector")
 
 
 class QuoteCollector:

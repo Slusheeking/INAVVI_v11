@@ -4,14 +4,15 @@ Strategy Adapter for the Autonomous Trading System.
 This module provides functionality for adapting strategy parameters.
 """
 
-import logging
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 class StrategyAdapter:
     """

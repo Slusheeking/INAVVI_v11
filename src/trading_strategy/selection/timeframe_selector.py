@@ -5,9 +5,9 @@ This module provides the TimeframeSelector class for selecting the appropriate
 timeframes for analysis and trading based on market conditions and strategy requirements.
 """
 
-import logging
+from src.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("trading_strategy.selection.timeframe_selector")
 
 
 class TimeframeSelector:

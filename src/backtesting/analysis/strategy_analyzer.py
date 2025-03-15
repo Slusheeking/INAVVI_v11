@@ -4,32 +4,16 @@ Strategy Analyzer for the Autonomous Trading System.
 This module provides functionality for analyzing strategy performance.
 """
 
-import logging
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import norm
-from pathlib import Path
+
+from src.utils.logging import get_logger
+from src.utils.metrics import calculate_trading_metrics
 
 # Set up logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-# Create logs directory if it doesn't exist
-log_dir = Path('/home/ubuntu/INAVVI_v11-1/src/logs')
-log_dir.mkdir(parents=True, exist_ok=True)
-
-# Create file handler
-log_file = log_dir / 'strategy_analyzer.log'
-file_handler = logging.FileHandler(log_file)
-file_handler.setLevel(logging.INFO)
-
-# Create formatter
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-
-# Add handler to logger
-logger.addHandler(file_handler)
+logger = get_logger(__name__)
 
 class StrategyAnalyzer:
     """
@@ -111,36 +95,18 @@ class StrategyAnalyzer:
         if 'equity' not in positions_df.columns:
             positions_df = self.calculate_equity_curve(positions_df)
         
-        # Calculate returns
-        positions_df['daily_return'] = positions_df['equity'].pct_change()
+        # Calculate returns if not already present
+        if 'daily_return' not in positions_df.columns:
+            positions_df['daily_return'] = positions_df['equity'].pct_change()
         
-        # Calculate metrics
-        total_days = (positions_df['exit_time'].max() - positions_df['entry_time'].min()).total_seconds() / (60 * 60 * 24)
-        total_return = (positions_df['equity'].iloc[-1] / self.initial_capital) - 1
-        annualized_return = (1 + total_return) ** (365 / total_days) - 1
+        # Use the metrics utility to calculate performance metrics
+        equity_series = positions_df['equity']
+        returns_series = positions_df['daily_return'].dropna()
         
-        daily_returns = positions_df['daily_return'].dropna().values
-        annualized_volatility = np.std(daily_returns) * np.sqrt(252)
+        # Calculate basic metrics using the utility
+        metrics = calculate_trading_metrics(equity_series, returns_series, risk_free_rate)
         
-        sharpe_ratio = (annualized_return - risk_free_rate) / annualized_volatility if annualized_volatility > 0 else 0
-        
-        # Calculate drawdown metrics
-        max_drawdown = positions_df['drawdown'].min()
-        max_drawdown_duration = 0
-        current_drawdown_duration = 0
-        in_drawdown = False
-        
-        for dd in positions_df['drawdown'].values:
-            if dd < 0:
-                in_drawdown = True
-                current_drawdown_duration += 1
-            else:
-                if in_drawdown:
-                    max_drawdown_duration = max(max_drawdown_duration, current_drawdown_duration)
-                    current_drawdown_duration = 0
-                    in_drawdown = False
-        
-        # Calculate win/loss metrics
+        # Calculate additional strategy-specific metrics
         wins = positions_df[positions_df['pnl'] > 0]
         losses = positions_df[positions_df['pnl'] < 0]
         
@@ -148,18 +114,10 @@ class StrategyAnalyzer:
         avg_win = wins['pnl'].mean() if len(wins) > 0 else 0
         avg_loss = losses['pnl'].mean() if len(losses) > 0 else 0
         profit_factor = abs(wins['pnl'].sum() / losses['pnl'].sum()) if losses['pnl'].sum() != 0 else float('inf')
+        avg_holding_period = positions_df['holding_period'].mean() if 'holding_period' in positions_df.columns else 0
         
-        # Calculate position metrics
-        avg_holding_period = positions_df['holding_period'].mean()
-        
-        # Store metrics
-        metrics = {
-            'total_return': total_return,
-            'annualized_return': annualized_return,
-            'annualized_volatility': annualized_volatility,
-            'sharpe_ratio': sharpe_ratio,
-            'max_drawdown': max_drawdown,
-            'max_drawdown_duration': max_drawdown_duration,
+        # Add strategy-specific metrics
+        metrics.update({
             'win_rate': win_rate,
             'avg_win': avg_win,
             'avg_loss': avg_loss,
@@ -168,7 +126,7 @@ class StrategyAnalyzer:
             'total_trades': len(positions_df),
             'winning_trades': len(wins),
             'losing_trades': len(losses)
-        }
+        })
         
         self.performance_metrics = metrics
         return metrics

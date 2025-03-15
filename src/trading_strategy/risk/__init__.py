@@ -1,17 +1,31 @@
 """
-Trading Strategy Risk Package
+Risk management for the Autonomous Trading System.
 
-This package contains components for managing trading risk, including stop losses and profit targets.
+This module provides utilities for managing risk in trading strategies,
+including stop loss management and profit target management.
 """
 
-from src.utils.logging.logger import get_logger
-from src.trading_strategy.risk.stop_loss_manager import StopLossManager
-from src.trading_strategy.risk.profit_target_manager import ProfitTargetManager
+from src.trading_strategy.risk.stop_loss_manager import (
+    StopLossManager,
+    calculate_stop_loss,
+    update_stop_loss,
+    check_stop_loss,
+)
 
-# Set up logger for this module
-logger = get_logger("trading_strategy.risk")
-logger.info("Initializing trading strategy risk package")
+from src.trading_strategy.risk.profit_target_manager import (
+    ProfitTargetManager,
+    calculate_profit_target,
+    update_profit_target,
+    check_profit_target,
+)
 
-__all__ = ["StopLossManager", "ProfitTargetManager"]
-
-logger.debug(f"Loaded risk components: {', '.join(__all__)}")
+__all__ = [
+    "StopLossManager",
+    "calculate_stop_loss",
+    "update_stop_loss",
+    "check_stop_loss",
+    "ProfitTargetManager",
+    "calculate_profit_target",
+    "update_profit_target",
+    "check_profit_target",
+]

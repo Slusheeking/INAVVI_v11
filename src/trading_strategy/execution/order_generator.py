@@ -5,12 +5,13 @@ This module provides the OrderGenerator class for generating orders based on
 trading signals, position sizing, and risk parameters.
 """
 
-import logging
 import uuid
 from datetime import datetime
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from src.utils.logging import get_logger
+
+logger = get_logger("trading_strategy.execution.order_generator")
 
 
 class OrderGenerator:

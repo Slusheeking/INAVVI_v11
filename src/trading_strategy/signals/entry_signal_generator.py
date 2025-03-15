@@ -5,13 +5,13 @@ This module provides the EntrySignalGenerator class for generating entry signals
 based on model predictions and market conditions.
 """
 
-import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Any
 
+from src.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("trading_strategy.signals.entry_signal_generator")
 
 
 class EntrySignalGenerator:

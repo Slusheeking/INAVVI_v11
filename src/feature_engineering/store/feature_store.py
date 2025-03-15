@@ -6,7 +6,6 @@ It integrates with the feature cache and registry to provide efficient access to
 """
 
 import json
-import logging
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
@@ -15,6 +14,13 @@ import pandas as pd
 
 # Import SQLAlchemy for database operations
 from sqlalchemy import create_engine, text
+
+# Import project utilities
+from src.utils.logging import get_logger
+from src.utils.database import (
+    get_sqlalchemy_engine,
+    execute_sqlalchemy_query
+)
 
 # Define simplified versions of the removed modules
 class DummyCache:
@@ -42,17 +48,20 @@ class DummyRegistry:
 class TimescaleManager:
     """Simplified database manager."""
     def __init__(self, connection_string=None):
-        self.engine = create_engine(connection_string or "sqlite:///:memory:")
+        self.engine = get_sqlalchemy_engine(
+            host="localhost",
+            port=5432,
+            database="postgres",
+            user="postgres",
+            password="postgres"
+        ) if connection_string is None else create_engine(connection_string)
     
     def execute_query(self, query, params=None):
         """Execute a query and return a DataFrame."""
-        import pandas as pd
         try:
-            with self.engine.connect() as conn:
-                result = conn.execute(text(query), params or {})
-                return pd.DataFrame(result.fetchall(), columns=result.keys())
+            return execute_sqlalchemy_query(self.engine, query, params or {})
         except Exception as e:
-            print(f"Error executing query: {e}")
+            logger.error(f"Error executing query: {e}")
             return pd.DataFrame()
     
     def execute_statement(self, query, params=None):
@@ -61,15 +70,14 @@ class TimescaleManager:
             with self.engine.connect() as conn:
                 return conn.execute(text(query), params or {})
         except Exception as e:
-            print(f"Error executing statement: {e}")
+            logger.error(f"Error executing statement: {e}")
             return None
 
 # Create instances of the dummy classes
 feature_store_cache = DummyCache()
 feature_registry = DummyRegistry()
 
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FeatureStore:

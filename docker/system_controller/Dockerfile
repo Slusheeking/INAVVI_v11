@@ -1,35 +1,49 @@
-# Use the same NVIDIA TensorFlow image as the existing containers
 FROM nvcr.io/nvidia/tensorflow:24.02-tf2-py3
 
-# Set up environment variables
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
     TZ=UTC \
     DEBIAN_FRONTEND=noninteractive
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
-    tzdata \
+    redis-tools \
+    netcat-openbsd \
     curl \
+    git \
+    wget \
+    build-essential \
     ca-certificates \
+    libc6-dev \
+    linux-libc-dev \
+    libstdc++-11-dev \
+    nvidia-cuda-toolkit \
     && rm -rf /var/lib/apt/lists/*
 
-# Set up Python environment
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir \
+# Install Python dependencies
+RUN pip install --no-cache-dir \
     psycopg2-binary \
+    redis \
     pandas \
-    pytz \
-    requests \
-    sqlalchemy \
     numpy \
+    fastapi \
+    uvicorn \
+    pydantic \
+    prometheus-client \
     pyyaml \
-    schedule \
-    prometheus_client
+    requests \
+    python-dotenv \
+    pytest \
+    pytest-cov \
+    flake8 \
+    black \
+    isort
 
-# Create app directory
+# Create app directories
 WORKDIR /app
+
+# Create necessary directories
+RUN mkdir -p /app/logs
 
 # Create non-root user
 RUN groupadd -g 1000 appuser && \
@@ -37,54 +51,22 @@ RUN groupadd -g 1000 appuser && \
     chown -R appuser:appuser /app
 
 # Copy application code
-COPY --chown=appuser:appuser autonomous_trading_system/src/utils /app/src/utils
-COPY --chown=appuser:appuser autonomous_trading_system/src/tests/system_components.py /app/src/system_controller/system_components.py
+COPY --chown=appuser:appuser src/utils /app/src/utils
+COPY --chown=appuser:appuser src/system_controller /app/src/system_controller
+COPY --chown=appuser:appuser docker/system_controller/start.sh /app/start.sh
 
-# Create a main.py file for the system controller
-RUN echo 'import os\n\
-import sys\n\
-import time\n\
-import logging\n\
-from src.system_controller.system_components import SystemController\n\
-\n\
-# Configure logging\n\
-logging.basicConfig(\n\
-    level=os.environ.get("LOG_LEVEL", "INFO"),\n\
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",\n\
-    handlers=[\n\
-        logging.StreamHandler(sys.stdout)\n\
-    ]\n\
-)\n\
-\n\
-logger = logging.getLogger("system_controller")\n\
-\n\
-def main():\n\
-    logger.info("Starting System Controller")\n\
-    \n\
-    # Initialize the system controller\n\
-    controller = SystemController()\n\
-    \n\
-    # Start the system controller\n\
-    controller.start()\n\
-    \n\
-    try:\n\
-        # Keep the main thread alive\n\
-        while True:\n\
-            time.sleep(1)\n\
-    except KeyboardInterrupt:\n\
-        logger.info("Shutting down System Controller")\n\
-        controller.stop()\n\
-\n\
-if __name__ == "__main__":\n\
-    main()\n\
-' > /app/src/system_controller/main.py
-
-# Create an empty __init__.py file
-RUN mkdir -p /app/src/system_controller && \
-    touch /app/src/system_controller/__init__.py
+# Make start script executable
+RUN chmod +x /app/start.sh
 
 # Switch to non-root user
 USER appuser
 
-# Set entry point
-CMD ["python", "-m", "src.system_controller.main"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose port
+EXPOSE 8000
+
+# Start the application
+CMD ["/app/start.sh"]

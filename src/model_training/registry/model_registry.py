@@ -8,18 +8,20 @@ It includes versioning, metadata tracking, and model lifecycle management.
 
 import glob
 import json
-import logging
 import os
-# Replaced standard pickle with PickleSerializer
-# import pickle
 import shutil
 import uuid
 from datetime import datetime
 from typing import Any
 import pandas as pd
 
-# Import required modules - using built-in modules instead of custom ones
-import pickle
+from src.utils.logging import get_logger
+from src.utils.serialization import (
+    save_json,
+    load_json,
+    serialize_model,
+    deserialize_model,
+)
 
 # Define dummy functions for port management
 def allocate_port(service_name):
@@ -29,24 +31,6 @@ def allocate_port(service_name):
 def release_port(port):
     """Dummy function to release a port."""
     pass
-
-# Define a simple pickle serializer
-class PickleSerializer:
-    """Simple pickle serializer."""
-    def serialize_to_file(self, obj, file_path):
-        """Serialize object to file."""
-        with open(file_path, 'wb') as f:
-            pickle.dump(obj, f)
-    
-    def deserialize_from_file(self, file_path):
-        """Deserialize object from file."""
-        with open(file_path, 'rb') as f:
-            return pickle.load(f)
-
-# Define a simple logger setup function
-def setup_logger(name):
-    """Simple logger setup function."""
-    return logging.getLogger(name)
 
 # Define a simple model metadata class
 class ModelMetadata:
@@ -80,23 +64,18 @@ class ModelMetadata:
         """Save metadata to file."""
         os.makedirs(directory, exist_ok=True)
         metadata_path = os.path.join(directory, f"{self.model_id}_metadata.json")
-        with open(metadata_path, "w") as f:
-            json.dump(self.metadata, f, indent=2)
+        save_json(self.metadata, metadata_path, indent=2)
         return metadata_path
     
     def load(self, metadata_path):
         """Load metadata from file."""
-        with open(metadata_path) as f:
-            self.metadata = json.load(f)
+        self.metadata = load_json(metadata_path)
         self.model_id = self.metadata.get("model_id", self.model_id)
         self.model_type = self.metadata.get("model_type", self.model_type)
         self.model_version = self.metadata.get("model_version", self.model_version)
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = setup_logger("model_registry")
+logger = get_logger("model_registry")
 
 
 class ModelRegistry:
@@ -134,8 +113,7 @@ class ModelRegistry:
         self.port = port
         self.allocated_port = None
         
-        # Initialize serializer
-        self.serializer = PickleSerializer()
+        # No need for a serializer instance as we'll use the utility functions directly
 
         # Create registry directory if it doesn't exist
         if create_if_missing and not os.path.exists(registry_dir):
@@ -189,7 +167,7 @@ class ModelRegistry:
 
         # Save model
         model_path = os.path.join(model_dir, f"{model_id}.pkl")
-        self.serializer.serialize_to_file(model, model_path)
+        serialize_model(model, model_path)
 
         # Save metadata
         metadata_path = metadata.save(model_dir)
@@ -278,7 +256,7 @@ class ModelRegistry:
 
         # Load model
         model_path = model_entry["model_path"]
-        model = self.serializer.deserialize_from_file(model_path)
+        model = deserialize_model(model_path)
 
         # Load metadata
         metadata = ModelMetadata()
@@ -626,7 +604,7 @@ class ModelRegistry:
             ID of the imported model
         """
         # Load model
-        model = self.serializer.deserialize_from_file(model_path)
+        model = deserialize_model(model_path)
 
         # Load or create metadata
         if metadata_path and os.path.exists(metadata_path):
@@ -661,8 +639,7 @@ class ModelRegistry:
 
         if os.path.exists(index_path):
             try:
-                with open(index_path) as f:
-                    return json.load(f)
+                return load_json(index_path)
             except Exception as e:
                 logger.error(f"Error loading model index: {e}")
                 return {}
@@ -733,9 +710,7 @@ class ModelRegistry:
         index_path = os.path.join(self.registry_dir, "model_index.json")
 
         try:
-            with open(index_path, "w") as f:
-                json.dump(self.model_index, f, indent=2)
-
+            save_json(self.model_index, index_path, indent=2)
             logger.debug(f"Saved model index to {index_path}")
         except Exception as e:
             logger.error(f"Error saving model index: {e}")

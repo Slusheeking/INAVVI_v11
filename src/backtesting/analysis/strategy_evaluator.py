@@ -4,32 +4,15 @@ StrategyEvaluator: Component for evaluating trading strategies.
 This module provides functionality for evaluating trading strategies based on
 various performance metrics, risk measures, and market conditions.
 """
-import logging
 import numpy as np
 import pandas as pd
-from pathlib import Path
 from typing import Dict, List, Any, Optional, Callable
 
+from src.utils.logging import get_logger
+from src.utils.metrics import calculate_trading_metrics
+
 # Set up logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-# Create logs directory if it doesn't exist
-log_dir = Path('/home/ubuntu/INAVVI_v11-1/src/logs')
-log_dir.mkdir(parents=True, exist_ok=True)
-
-# Create file handler
-log_file = log_dir / 'strategy_evaluator.log'
-file_handler = logging.FileHandler(log_file)
-file_handler.setLevel(logging.INFO)
-
-# Create formatter
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-
-# Add handler to logger
-logger.addHandler(file_handler)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class StrategyEvaluator:
     """
@@ -111,9 +94,9 @@ class StrategyEvaluator:
         self.evaluation_results[strategy_name] = results
         return results
     
-    def _calculate_performance_metrics(self, 
-                                      trades_df: pd.DataFrame, 
-                                      portfolio_df: pd.DataFrame) -> Dict[str, float]:
+    def _calculate_performance_metrics(self,
+                                       trades_df: pd.DataFrame,
+                                       portfolio_df: pd.DataFrame) -> Dict[str, float]:
         """
         Calculate performance metrics for strategy evaluation.
         
@@ -127,46 +110,27 @@ class StrategyEvaluator:
         metrics = {}
         
         if not portfolio_df.empty and 'equity' in portfolio_df.columns:
-            # Calculate returns
-            portfolio_df['returns'] = portfolio_df['equity'].pct_change()
+            # Ensure returns are calculated
+            if 'returns' not in portfolio_df.columns:
+                portfolio_df['returns'] = portfolio_df['equity'].pct_change()
             
-            # Calculate cumulative returns
-            initial_equity = portfolio_df['equity'].iloc[0]
-            final_equity = portfolio_df['equity'].iloc[-1]
-            total_return = (final_equity / initial_equity) - 1
+            # Use the metrics utility to calculate performance metrics
+            basic_metrics = calculate_trading_metrics(
+                portfolio_df['equity'],
+                portfolio_df['returns'].dropna()
+            )
             
-            # Calculate annualized return
-            days = (portfolio_df.index[-1] - portfolio_df.index[0]).days
-            if days > 0:
-                annualized_return = (1 + total_return) ** (365 / days) - 1
-            else:
-                annualized_return = 0
+            # Add basic metrics to our metrics dictionary
+            metrics.update(basic_metrics)
             
-            # Calculate volatility
+            # Calculate additional strategy evaluation specific metrics
             daily_returns = portfolio_df['returns'].dropna()
-            if not daily_returns.empty:
-                volatility = daily_returns.std()
-                annualized_volatility = volatility * np.sqrt(252)  # Assuming 252 trading days
-            else:
-                volatility = 0
-                annualized_volatility = 0
             
-            # Calculate Sharpe ratio (assuming risk-free rate of 0)
-            if annualized_volatility > 0:
-                sharpe_ratio = annualized_return / annualized_volatility
-            else:
-                sharpe_ratio = 0
-            
-            # Calculate drawdown
-            portfolio_df['peak'] = portfolio_df['equity'].cummax()
-            portfolio_df['drawdown'] = (portfolio_df['equity'] - portfolio_df['peak']) / portfolio_df['peak']
-            max_drawdown = portfolio_df['drawdown'].min()
-            
-            # Calculate Calmar ratio
-            if max_drawdown < 0:
-                calmar_ratio = annualized_return / abs(max_drawdown)
-            else:
-                calmar_ratio = float('inf')
+            # Calculate Calmar ratio if not already calculated
+            if 'calmar_ratio' not in metrics and 'max_drawdown' in metrics and metrics['max_drawdown'] < 0:
+                metrics['calmar_ratio'] = metrics['annualized_return'] / abs(metrics['max_drawdown'])
+            elif 'calmar_ratio' not in metrics:
+                metrics['calmar_ratio'] = float('inf')
             
             # Calculate Omega ratio
             threshold = 0  # Can be adjusted
@@ -174,20 +138,9 @@ class StrategyEvaluator:
             returns_below_threshold = daily_returns[daily_returns <= threshold]
             
             if len(returns_below_threshold) > 0 and abs(returns_below_threshold.sum()) > 0:
-                omega_ratio = returns_above_threshold.sum() / abs(returns_below_threshold.sum())
+                metrics['omega_ratio'] = returns_above_threshold.sum() / abs(returns_below_threshold.sum())
             else:
-                omega_ratio = float('inf')
-            
-            metrics = {
-                'total_return': total_return,
-                'annualized_return': annualized_return,
-                'volatility': volatility,
-                'annualized_volatility': annualized_volatility,
-                'sharpe_ratio': sharpe_ratio,
-                'max_drawdown': max_drawdown,
-                'calmar_ratio': calmar_ratio,
-                'omega_ratio': omega_ratio,
-            }
+                metrics['omega_ratio'] = float('inf')
         
         return metrics
     

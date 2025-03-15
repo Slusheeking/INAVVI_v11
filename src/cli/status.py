@@ -5,20 +5,14 @@ CLI command to check the status of the autonomous trading system.
 
 import argparse
 import json
-import logging
 import subprocess
 import sys
-from datetime import datetime
 from tabulate import tabulate
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+from src.utils.logging import get_logger
 
-logger = logging.getLogger("inavvi-status")
+# Set up logger for this module
+logger = get_logger("cli.status")
 
 def parse_args():
     """Parse command line arguments."""
@@ -109,7 +103,9 @@ def main():
     args = parse_args()
     
     # Set log level
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
+    # Note: get_logger already sets up the logger, but we can update the level if needed
+    if args.log_level:
+        logger.setLevel(args.log_level)
     
     # Get system status
     logger.info("Checking system status...")

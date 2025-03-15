@@ -8,7 +8,6 @@ dollar profit optimization, and GPU acceleration.
 """
 
 import json
-import logging
 import os
 import time
 from datetime import datetime
@@ -44,13 +43,11 @@ from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.regularizers import l1_l2
 
-# Import standard libraries only
+# Import logging utility
+from src.utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger("lstm_model")
+# Get logger for this module
+logger = get_logger("lstm_model")
 
 
 class LSTMModel:

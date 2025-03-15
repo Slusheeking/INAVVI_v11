@@ -11,7 +11,6 @@ latency, and performance.
 import os
 import sys
 import time
-import logging
 import asyncio
 import traceback
 from datetime import datetime, timedelta
@@ -21,6 +20,9 @@ import numpy as np
 
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
+# Import logging utility
+from src.utils.logging import get_logger
 
 # Import custom components
 from src.tests.performance_metrics import PerformanceMetrics
@@ -82,13 +84,8 @@ from src.config.database_config import get_db_connection_string
 from src.utils.time.market_hours import get_market_status, MarketStatus
 from src.utils.time.market_calendar import MarketCalendar
 
-# Set up logging to console
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger("full_system_test")
+# Set up logger for this module
+logger = get_logger("tests.full_system_test")
 
 class FullSystemTest:
     """Test class for full system testing."""
@@ -147,12 +144,28 @@ class FullSystemTest:
         )
         
         # Configure Alpaca client for high-frequency trading
+        # Use environment variable to determine if we should use paper or live trading
+        use_paper_trading = os.environ.get("USE_PAPER_TRADING", "true").lower() == "true"
+        
+        if use_paper_trading:
+            alpaca_base_url = "https://paper-api.alpaca.markets/v2"
+            logger.info("Using Alpaca PAPER trading API")
+        else:
+            alpaca_base_url = "https://api.alpaca.markets/v2"
+            logger.info("Using Alpaca LIVE trading API - CAUTION: Real money will be used")
+            
+        # Get position limits from environment variables
+        max_position_value = float(os.environ.get("MAX_POSITION_VALUE", "2500.0"))
+        max_daily_value = float(os.environ.get("MAX_DAILY_VALUE", "5000.0"))
+        
+        logger.info(f"Position limits: ${max_position_value} per stock, ${max_daily_value} per day")
+        
         self.alpaca_client = AlpacaClient(
             api_key=self.alpaca_key_id,
             api_secret=self.alpaca_secret_key,
-            base_url="https://paper-api.alpaca.markets/v2",  # Use paper trading for testing
-            max_position_value=2500.0,  # Maximum $2500 per stock
-            max_daily_value=5000.0  # Maximum $5000 per day
+            base_url=alpaca_base_url,
+            max_position_value=max_position_value,
+            max_daily_value=max_daily_value
         )
         
         # Initialize database connection
@@ -324,8 +337,10 @@ class FullSystemTest:
             # Outside market hours, use historical data for training
             logger.info("Market is closed - using historical data for training")
             end_date = now.strftime("%Y-%m-%d")
-            # Use more historical data for training (30 days)
-            start_date = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+            # Use historical data for training with configurable timeframe
+            historical_days = int(os.environ.get("HISTORICAL_TRAINING_DAYS", "30"))
+            logger.info(f"Using {historical_days} days of historical data for training")
+            start_date = (now - timedelta(days=historical_days)).strftime("%Y-%m-%d")
             use_live_data = False
             
         return start_date, end_date, use_live_data
@@ -967,11 +982,15 @@ class FullSystemTest:
                     # Get the latest price
                     latest_price = list(timeframe_signals.values())[0]['price']
                     
-                    # Create trade decision
+                    # Create trade decision with actual confidence from signals
+                    # Use the average confidence from all timeframe signals
+                    confidences = [signal['confidence'] for signal in timeframe_signals.values()]
+                    avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+                    
                     trade_decision = {
                         'ticker': ticker,
                         'direction': direction,
-                        'confidence': 0.7,
+                        'confidence': avg_confidence,
                         'price': latest_price,
                         'timestamp': datetime.now().isoformat()
                     }
@@ -1114,9 +1133,11 @@ class FullSystemTest:
             historical_data = {}
             for ticker in tickers[:2]:  # Limit to 2 tickers to reduce API calls
                 try:
-                    # Fetch daily data for the past 90 days
+                    # Fetch historical data with configurable timeframe
+                    backtest_days = int(os.environ.get("BACKTEST_DAYS", "90"))
+                    logger.info(f"Using {backtest_days} days of historical data for backtesting")
                     end_date = datetime.now().strftime("%Y-%m-%d")
-                    start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+                    start_date = (datetime.now() - timedelta(days=backtest_days)).strftime("%Y-%m-%d")
                     
                     ticker_fetch_start = time.time()
                     daily_df = self.storage.get_stock_aggs(
@@ -1147,9 +1168,9 @@ class FullSystemTest:
                 api_fetch_start = time.time()
                 for ticker in tickers[:2]:  # Limit to 2 tickers for API efficiency
                     try:
-                        # Fetch daily data
+                        # Fetch historical data with same configurable timeframe
                         end_date = datetime.now().strftime("%Y-%m-%d")
-                        start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+                        start_date = (datetime.now() - timedelta(days=backtest_days)).strftime("%Y-%m-%d")
                         
                         ticker_api_start = time.time()
                         daily_df = self.polygon_client.get_bars(
@@ -1179,16 +1200,25 @@ class FullSystemTest:
             backtest_results = {}
             for ticker, df in historical_data.items():
                 try:
+                    # Get strategy parameters from environment variables
+                    stop_loss_pct = float(os.environ.get("BACKTEST_STOP_LOSS_PCT", "0.02"))
+                    profit_target_pct = float(os.environ.get("BACKTEST_PROFIT_TARGET_PCT", "0.03"))
+                    entry_threshold = float(os.environ.get("BACKTEST_ENTRY_THRESHOLD", "0.6"))
+                    exit_threshold = float(os.environ.get("BACKTEST_EXIT_THRESHOLD", "0.4"))
+                    
+                    logger.info(f"Backtest strategy parameters: stop_loss={stop_loss_pct}, profit_target={profit_target_pct}, " +
+                               f"entry_threshold={entry_threshold}, exit_threshold={exit_threshold}")
+                    
                     # Run backtest
                     ticker_backtest_start = time.time()
                     results = self.backtest_engine.run_backtest(
                         ticker=ticker,
                         data=df,
                         strategy_params={
-                            'stop_loss_pct': 0.02,
-                            'profit_target_pct': 0.03,
-                            'entry_threshold': 0.6,
-                            'exit_threshold': 0.4
+                            'stop_loss_pct': stop_loss_pct,
+                            'profit_target_pct': profit_target_pct,
+                            'entry_threshold': entry_threshold,
+                            'exit_threshold': exit_threshold
                         }
                     )
                     
@@ -1231,10 +1261,14 @@ class FullSystemTest:
                 logger.error("Data acquisition test failed")
                 return False
             
-            # If no tickers were selected, use default tickers
+            # If no tickers were selected, use default tickers from environment or fallback to standard ones
             if not tickers:
-                logger.warning("No tickers selected, using default tickers")
-                tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
+                # Get default tickers from environment variable or use standard ones
+                default_tickers_str = os.environ.get("DEFAULT_TEST_TICKERS", "AAPL,MSFT,GOOGL,AMZN,META")
+                default_tickers = [ticker.strip() for ticker in default_tickers_str.split(",")]
+                
+                logger.warning(f"No tickers selected, using default tickers: {default_tickers}")
+                tickers = default_tickers
             
             logger.info(f"Using tickers for testing: {tickers[:5]}...")
             

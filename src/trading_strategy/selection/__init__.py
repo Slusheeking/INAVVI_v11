@@ -1,17 +1,31 @@
 """
-Trading Strategy Selection Package
+Selection utilities for the Autonomous Trading System.
 
-This package contains components for selecting trading instruments and timeframes.
+This module provides utilities for selecting tickers and timeframes
+for trading strategies.
 """
 
-from src.utils.logging.logger import get_logger
-from src.trading_strategy.selection.ticker_selector import TickerSelector
-from src.trading_strategy.selection.timeframe_selector import TimeframeSelector
+from src.trading_strategy.selection.ticker_selector import (
+    TickerSelector,
+    select_tickers,
+    filter_tickers,
+    rank_tickers,
+)
 
-# Set up logger for this module
-logger = get_logger("trading_strategy.selection")
-logger.info("Initializing trading strategy selection package")
+from src.trading_strategy.selection.timeframe_selector import (
+    TimeframeSelector,
+    select_timeframe,
+    get_optimal_timeframe,
+    get_timeframe_range,
+)
 
-__all__ = ["TickerSelector", "TimeframeSelector"]
-
-logger.debug(f"Loaded selection components: {', '.join(__all__)}")
+__all__ = [
+    "TickerSelector",
+    "select_tickers",
+    "filter_tickers",
+    "rank_tickers",
+    "TimeframeSelector",
+    "select_timeframe",
+    "get_optimal_timeframe",
+    "get_timeframe_range",
+]

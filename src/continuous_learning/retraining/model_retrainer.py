@@ -6,8 +6,6 @@ This module provides functionality for retraining machine learning models
 based on new data and performance feedback.
 """
 
-import json
-import logging
 import os
 import traceback
 from collections.abc import Callable
@@ -16,7 +14,13 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-logger = logging.getLogger("model_retrainer")
+
+# Import project utilities
+from src.utils.logging import get_logger
+from src.utils.serialization import save_json, load_json
+from src.utils.metrics import calculate_trading_metrics
+
+logger = get_logger("model_retrainer")
 
 
 class ModelRetrainer:
@@ -774,61 +778,11 @@ class ModelRetrainer:
             # Convert to numpy arrays
             y_true = target.values if isinstance(target, pd.Series) else target
             y_pred = predictions
-
-            # Calculate directional accuracy
-            directional_accuracy = np.mean(np.sign(y_pred) == np.sign(y_true))
-
-            # Simulate trading based on predictions
-            # Positive prediction -> long position, Negative prediction -> short position
-            position = np.sign(y_pred)
-
-            # Calculate returns (position * actual return)
-            returns = position * y_true
-
-            # Calculate cumulative returns
-            cumulative_returns = np.cumprod(1 + returns) - 1
-
-            # Calculate dollar profit (assuming $10,000 initial capital)
-            initial_capital = 10000
-            dollar_profit = (
-                initial_capital * cumulative_returns[-1]
-                if len(cumulative_returns) > 0
-                else 0
-            )
-
-            # Calculate win rate
-            winning_trades = np.sum(returns > 0)
-            total_trades = np.sum(position != 0)
-            win_rate = winning_trades / total_trades if total_trades > 0 else 0
-
-            # Calculate profit factor
-            gross_profit = np.sum(returns[returns > 0])
-            gross_loss = np.abs(np.sum(returns[returns < 0]))
-            profit_factor = (
-                gross_profit / gross_loss if gross_loss > 0 else float("inf")
-            )
-
-            # Calculate Sharpe ratio (annualized)
-            sharpe_ratio = (
-                np.mean(returns) / np.std(returns) * np.sqrt(252)
-                if np.std(returns) > 0
-                else 0
-            )
-
-            # Calculate maximum drawdown
-            peak = np.maximum.accumulate(cumulative_returns + 1)
-            drawdown = (peak - (cumulative_returns + 1)) / peak
-            max_drawdown = np.max(drawdown) if len(drawdown) > 0 else 0
-
-            return {
-                "directional_accuracy": directional_accuracy,
-                "dollar_profit": dollar_profit,
-                "win_rate": win_rate,
-                "profit_factor": profit_factor,
-                "sharpe_ratio": sharpe_ratio,
-                "max_drawdown": max_drawdown,
-            }
-
+            
+            # Use the utility function from utils.metrics
+            metrics = calculate_trading_metrics(y_true, y_pred, initial_capital=10000)
+            
+            return metrics
         except Exception as e:
             logger.error(f"Error calculating trading metrics: {e}")
             return {}
@@ -1004,9 +958,7 @@ class ModelRetrainer:
             True if save was successful, False otherwise
         """
         try:
-            with open(file_path, "w") as f:
-                json.dump(self.retraining_history, f, indent=2)
-
+            save_json(self.retraining_history, file_path)
             logger.info(f"Retraining history saved to {file_path}")
             return True
 
@@ -1025,9 +977,7 @@ class ModelRetrainer:
             True if load was successful, False otherwise
         """
         try:
-            with open(file_path) as f:
-                self.retraining_history = json.load(f)
-
+            self.retraining_history = load_json(file_path)
             logger.info(f"Retraining history loaded from {file_path}")
             return True
 

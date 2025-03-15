@@ -4,33 +4,15 @@ MarketSimulator: Component for simulating market data in backtests.
 This module provides functionality for simulating market data feeds and
 conditions during backtesting of trading strategies.
 """
-import logging
 import datetime
 import pandas as pd
 import numpy as np
-from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple, Union, Iterator
 
-# Set up logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+from src.utils.logging import get_logger
 
-# Create logs directory if it doesn't exist
-log_dir = Path('/home/ubuntu/INAVVI_v11-1/src/logs')
-log_dir.mkdir(parents=True, exist_ok=True)
-
-# Create file handler
-log_file = log_dir / 'market_simulator.log'
-file_handler = logging.FileHandler(log_file)
-file_handler.setLevel(logging.INFO)
-
-# Create formatter
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-
-# Add handler to logger
-logger.addHandler(file_handler)
-logger = logging.getLogger(__name__)
+# Set up logger for this module
+logger = get_logger("backtesting.engine.market_simulator")
 
 class MarketSimulator:
     """
