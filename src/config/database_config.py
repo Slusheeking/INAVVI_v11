@@ -63,3 +63,36 @@ class DatabaseConfig:
                 logger.info(f"Updated database configuration: {key}={value}")
             else:
                 logger.warning(f"Unknown database configuration parameter: {key}")
+
+# Global singleton instance
+_database_config = None
+
+def get_database_config():
+    """
+    Get the database configuration instance.
+    
+    Returns:
+        DatabaseConfig: Database configuration instance
+    """
+    global _database_config
+    if _database_config is None:
+        _database_config = DatabaseConfig()
+    return _database_config
+
+def get_database_config_from_env():
+    """
+    Get a database configuration instance from environment variables.
+    
+    Returns:
+        DatabaseConfig: Database configuration instance
+    """
+    return DatabaseConfig()
+
+def get_db_connection_string():
+    """
+    Get the database connection string.
+    
+    Returns:
+        str: Database connection string
+    """
+    return get_database_config().get_connection_string()

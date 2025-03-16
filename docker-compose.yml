@@ -4,18 +4,18 @@ services:
   # Database
   timescaledb:
     image: timescale/timescaledb:latest-pg14
-    container_name: ats-timescaledb-main
+    container_name: ats-timescaledb
     environment:
-      - POSTGRES_USER=ats_user
-      - POSTGRES_PASSWORD=ats_password
-      - POSTGRES_DB=ats_db
+      - POSTGRES_USER=${TIMESCALEDB_USER}
+      - POSTGRES_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - POSTGRES_DB=${TIMESCALEDB_DATABASE}
     volumes:
       - timescaledb-data:/var/lib/postgresql/data
       - ./docker/timescaledb/init:/docker-entrypoint-initdb.d
     ports:
-      - "5435:5432"
+      - "5433:5432"  # Map to port 5433 on the host to avoid conflicts
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ats_user -d ats_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${TIMESCALEDB_USER} -d ${TIMESCALEDB_DATABASE}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -27,10 +27,10 @@ services:
   # Redis for caching and pub/sub
   redis:
     image: redis:7-alpine
-    container_name: ats-redis-cache
+    container_name: ats-redis
     command: redis-server --requirepass ${REDIS_PASSWORD}
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -56,7 +56,6 @@ services:
         condition: service_healthy
     environment:
       - ENVIRONMENT=${ENVIRONMENT}
-      # Override TIMESCALEDB_HOST for Docker network communication
       - TIMESCALEDB_HOST=timescaledb
       - TIMESCALEDB_PORT=5432
       - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
@@ -65,13 +64,14 @@ services:
       - REDIS_HOST=${REDIS_HOST}
       - REDIS_PORT=${REDIS_PORT}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - GPU_ENABLED=true
-      - NVIDIA_VISIBLE_DEVICES=all
       - LOG_LEVEL=${LOG_LEVEL}
       - TZ=${TZ}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - CUDA_VISIBLE_DEVICES=0
-      - CUDA_VERSION=12.4
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_CHANNEL=${SLACK_CHANNEL}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
     volumes:
       - logs:/app/logs
       - ./config:/app/config:ro
@@ -86,92 +86,24 @@ services:
     restart: unless-stopped
     networks:
       - trading-network
-    runtime: nvidia
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu, compute, utility]
 
-  # Data Acquisition
-  data-acquisition:
+  # Data Pipeline (combines data-acquisition and data-processing)
+  data-pipeline:
     build:
       context: .
-      dockerfile: docker/data_acquisition/Dockerfile
-    image: autonomous_trading_system/data-acquisition:${VERSION}
-    container_name: ats-data-acquisition
+      dockerfile: docker/data_pipeline/Dockerfile
+    image: autonomous_trading_system/data-pipeline:${VERSION}
+    container_name: ats-data-pipeline
     depends_on:
       system-controller:
         condition: service_healthy
-    environment:
-      - ENVIRONMENT=${ENVIRONMENT}
-      # Override TIMESCALEDB_HOST for Docker network communication
-      - TIMESCALEDB_HOST=timescaledb
-      - TIMESCALEDB_PORT=5432
-      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
-      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
-      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - POLYGON_API_KEY=${POLYGON_API_KEY}
-      - POLYGON_WEBSOCKET_BUFFER_SIZE=${POLYGON_WEBSOCKET_BUFFER_SIZE}
-      - POLYGON_WEBSOCKET_USE_COMPRESSION=${POLYGON_WEBSOCKET_USE_COMPRESSION}
-      - UNUSUAL_WHALES_API_KEY=${UNUSUAL_WHALES_API_KEY}
-      - UNUSUAL_WHALES_CACHE_RESULTS=${UNUSUAL_WHALES_CACHE_RESULTS}
-      - UNUSUAL_WHALES_CACHE_TTL_HIGH_PRIORITY=${UNUSUAL_WHALES_CACHE_TTL_HIGH_PRIORITY}
-      - UNUSUAL_WHALES_CACHE_TTL_NORMAL=${UNUSUAL_WHALES_CACHE_TTL_NORMAL}
-      - GPU_ENABLED=${GPU_ENABLED}
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - TZ=${TZ}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - CUDA_VISIBLE_DEVICES=0
-    volumes:
-      - logs:/app/logs
-      - data:/app/data
-      - ./config:/app/config:ro
-    ports:
-      - "8001:8001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-    networks:
-      - trading-network
-    runtime: nvidia
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
-  # Trading Strategy
-  trading-strategy:
-    build:
-      context: .
-      dockerfile: docker/trading_strategy/Dockerfile
-    image: autonomous_trading_system/trading-strategy:${VERSION}
-    container_name: ats-trading-strategy
-    depends_on:
-      data-acquisition:
+      timescaledb:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment:
       - ENVIRONMENT=${ENVIRONMENT}
-      # Override TIMESCALEDB_HOST for Docker network communication
+      - VALIDATE_APIS=true
       - TIMESCALEDB_HOST=timescaledb
       - TIMESCALEDB_PORT=5432
       - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
@@ -182,25 +114,27 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
       - ALPACA_API_KEY=${ALPACA_API_KEY}
       - ALPACA_API_SECRET=${ALPACA_API_SECRET}
-      - ALPACA_API_BASE_URL=${ALPACA_API_BASE_URL}
-      - MAX_POSITION_SIZE=${MAX_POSITION_SIZE}
-      - RISK_PERCENTAGE=${RISK_PERCENTAGE}
-      - MAX_POSITIONS=${MAX_POSITIONS}
-      - MAX_POSITION_VALUE=${MAX_POSITION_VALUE}
-      - MAX_DAILY_VALUE=${MAX_DAILY_VALUE}
-      - GPU_ENABLED=${GPU_ENABLED}
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - POLYGON_WEBSOCKET_BUFFER_SIZE=${POLYGON_WEBSOCKET_BUFFER_SIZE}
+      - POLYGON_WEBSOCKET_USE_COMPRESSION=${POLYGON_WEBSOCKET_USE_COMPRESSION}
+      - UNUSUAL_WHALES_API_KEY=${UNUSUAL_WHALES_API_KEY}
+      - UNUSUAL_WHALES_CACHE_RESULTS=${UNUSUAL_WHALES_CACHE_RESULTS}
+      - UNUSUAL_WHALES_CACHE_TTL_HIGH_PRIORITY=${UNUSUAL_WHALES_CACHE_TTL_HIGH_PRIORITY}
+      - UNUSUAL_WHALES_CACHE_TTL_NORMAL=${UNUSUAL_WHALES_CACHE_TTL_NORMAL}
       - LOG_LEVEL=${LOG_LEVEL}
       - TZ=${TZ}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - CUDA_VISIBLE_DEVICES=0
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_CHANNEL=${SLACK_CHANNEL}
     volumes:
       - logs:/app/logs
+      - data:/app/data
       - ./config:/app/config:ro
     ports:
-      - "8002:8002"
+      - "8001:8001"
+      - "8006:8006"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -208,31 +142,24 @@ services:
     restart: unless-stopped
     networks:
       - trading-network
-    runtime: nvidia
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu, compute, utility]
 
-  # Model Training
-  model-training:
+  # Model Platform (combines model-training, model-services, and continuous-learning)
+  model-platform:
     build:
       context: .
-      dockerfile: docker/model_training/Dockerfile
-    image: autonomous_trading_system/model-training:${VERSION}
-    container_name: ats-model-training-tf
+      dockerfile: docker/model_platform/Dockerfile.gpu
+    image: autonomous_trading_system/model-platform:${VERSION}
+    container_name: ats-model-platform
+    runtime: nvidia
     depends_on:
       system-controller:
         condition: service_healthy
+      data-pipeline:
+        condition: service_healthy
     environment:
       - ENVIRONMENT=${ENVIRONMENT}
-      # Override TIMESCALEDB_HOST for Docker network communication
+      - VALIDATE_APIS=false
+      - PLATFORM=linux/arm64
       - TIMESCALEDB_HOST=timescaledb
       - TIMESCALEDB_PORT=5432
       - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
@@ -241,22 +168,43 @@ services:
       - REDIS_HOST=${REDIS_HOST}
       - REDIS_PORT=${REDIS_PORT}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - GPU_ENABLED=${GPU_ENABLED}
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
       - MODEL_REGISTRY_PATH=${MODEL_REGISTRY_PATH}
       - MODEL_CHECKPOINT_PATH=${MODEL_CHECKPOINT_PATH}
       - MODEL_SERVING_PORT=${MODEL_SERVING_PORT}
+      - GPU_ENABLED=${GPU_ENABLED}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - TF_FORCE_GPU_ALLOW_GROWTH=true
+      - TF_GPU_ALLOCATOR=cuda_malloc_async
+      - TF_ENABLE_ONEDNN_OPTS=1
+      - TF_XLA_FLAGS=--tf_xla_enable_xla_devices --tf_xla_auto_jit=2
+      - XLA_FLAGS=--xla_gpu_cuda_data_dir=/usr/local/cuda
+      - TF_CUDA_COMPUTE_CAPABILITIES=8.9
+      - TF_EXTRA_CUDA_COMPUTE_CAPABILITIES=9.0
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+      - CUDA_VISIBLE_DEVICES=all
       - LOG_LEVEL=${LOG_LEVEL}
       - TZ=${TZ}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - CUDA_VISIBLE_DEVICES=0
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_CHANNEL=${SLACK_CHANNEL}
     volumes:
       - logs:/app/logs
       - models:/app/models
+      - data:/app/data
+      - results:/app/results
+      - /usr/local/cuda:/usr/local/cuda:ro
+      - /usr/local/cuda/lib64:/usr/local/cuda/lib64:ro
+      - /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu
       - ./config:/app/config:ro
     ports:
       - "8003:8003"
-      - "8500:8500"  # TensorFlow Serving port
+      - "8005:8005"
+      - "8500:8500"
+      - "8501:8501"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 30s
@@ -266,31 +214,29 @@ services:
     restart: unless-stopped
     networks:
       - trading-network
-    runtime: nvidia
     deploy:
       resources:
-        limits:
-          cpus: '2.0'
-          memory: 4G
         reservations:
           devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu, compute, utility]
+            - driver: nvidia 
+              count: all
+              capabilities: [gpu, compute, utility, video, graphics]
 
-  # Feature Engineering
-  feature-engineering:
+  # Feature Trading (combines feature-engineering and trading-strategy)
+  feature-trading:
     build:
       context: .
-      dockerfile: docker/feature_engineering/Dockerfile
-    image: autonomous_trading_system/feature-engineering:${VERSION}
-    container_name: ats-feature-engineering
+      dockerfile: docker/feature_trading/Dockerfile
+    image: autonomous_trading_system/feature-trading:${VERSION}
+    container_name: ats-feature-trading
     depends_on:
-      system-controller:
+      data-pipeline:
+        condition: service_healthy
+      model-platform:
         condition: service_healthy
     environment:
       - ENVIRONMENT=${ENVIRONMENT}
-      # Override TIMESCALEDB_HOST for Docker network communication
+      - VALIDATE_APIS=true
       - TIMESCALEDB_HOST=timescaledb
       - TIMESCALEDB_PORT=5432
       - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
@@ -302,18 +248,30 @@ services:
       - FEATURE_STORE_PATH=${FEATURE_STORE_PATH}
       - FEATURE_CACHE_ENABLED=${FEATURE_CACHE_ENABLED}
       - FEATURE_CACHE_TTL=${FEATURE_CACHE_TTL}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - ALPACA_API_BASE_URL=${ALPACA_API_BASE_URL}
+      - MAX_POSITION_SIZE=${MAX_POSITION_SIZE}
+      - RISK_PERCENTAGE=${RISK_PERCENTAGE}
+      - MAX_POSITIONS=${MAX_POSITIONS}
+      - MAX_POSITION_VALUE=${MAX_POSITION_VALUE}
+      - MAX_DAILY_VALUE=${MAX_DAILY_VALUE}
       - GPU_ENABLED=${GPU_ENABLED}
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES}
       - LOG_LEVEL=${LOG_LEVEL}
       - TZ=${TZ}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - CUDA_VISIBLE_DEVICES=0
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_CHANNEL=${SLACK_CHANNEL}
     volumes:
       - logs:/app/logs
+      - data:/app/data
       - features:/app/features
       - ./config:/app/config:ro
     ports:
       - "8004:8004"
+      - "8002:8002"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
       interval: 30s
@@ -323,297 +281,32 @@ services:
     restart: unless-stopped
     networks:
       - trading-network
-    runtime: nvidia
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 2G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu, compute, utility]
 
-  # Continuous Learning
-  continuous-learning:
-    build:
-      context: .
-      dockerfile: docker/continuous_learning/Dockerfile
-    image: autonomous_trading_system/continuous-learning:${VERSION}
-    container_name: ats-continuous-learning
-    depends_on:
-      model-training:
-        condition: service_healthy
-      feature-engineering:
-        condition: service_healthy
-    environment:
-      - ENVIRONMENT=${ENVIRONMENT}
-      # Override TIMESCALEDB_HOST for Docker network communication
-      - TIMESCALEDB_HOST=timescaledb
-      - TIMESCALEDB_PORT=5432
-      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
-      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
-      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - MODEL_REGISTRY_PATH=${MODEL_REGISTRY_PATH}
-      - BACKTEST_DATA_PATH=${BACKTEST_DATA_PATH}
-      - BACKTEST_RESULTS_PATH=${BACKTEST_RESULTS_PATH}
-      - GPU_ENABLED=${GPU_ENABLED}
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - TZ=${TZ}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - CUDA_VISIBLE_DEVICES=0
-    volumes:
-      - logs:/app/logs
-      - models:/app/models
-      - data:/app/data
-      - results:/app/results
-      - ./config:/app/config:ro
-    ports:
-      - "8005:8005"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-    networks:
-      - trading-network
-    runtime: nvidia
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 2G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu, compute, utility]
-
-  # Monitoring: Prometheus
+  # Prometheus for monitoring
   prometheus:
     image: prom/prometheus:latest
     container_name: ats-prometheus
     volumes:
       - ./monitoring/prometheus:/etc/prometheus
       - prometheus-data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--web.enable-lifecycle'
     ports:
       - "9090:9090"
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9090/-/healthy || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
     restart: unless-stopped
     networks:
       - trading-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
 
-  # Node Exporter for host metrics
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: ats-node-exporter
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    command:
-      - '--path.procfs=/host/proc'
-      - '--path.rootfs=/rootfs'
-      - '--path.sysfs=/host/sys'
-      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
-    ports:
-      - "9100:9100"
-    restart: unless-stopped
-    networks:
-      - trading-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.2'
-          memory: 256M
-
-  # cAdvisor for container metrics
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
-    container_name: ats-cadvisor
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
-    ports:
-      - "8080:8080"
-    restart: unless-stopped
-    networks:
-      - trading-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.3'
-          memory: 512M
-
-  # TimescaleDB metrics exporter
-  timescaledb-exporter:
-    image: prometheuscommunity/postgres-exporter:latest
-    container_name: ats-timescaledb-main-exporter
-    environment:
-      # Inside Docker network, the DB is still accessed on its default port 5432
-      - DATA_SOURCE_NAME=postgresql://${TIMESCALEDB_USER}:${TIMESCALEDB_PASSWORD}@timescaledb:5432/${TIMESCALEDB_DATABASE}?sslmode=disable
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    ports:
-      - "9187:9187"
-    restart: unless-stopped
-    networks:
-      - trading-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.2'
-          memory: 256M
-
-  # Redis metrics exporter
-  redis-exporter:
-    image: oliver006/redis_exporter:latest
-    container_name: ats-redis-cache-exporter
-    environment:
-      - REDIS_ADDR=redis://redis:6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-    ports:
-      - "9121:9121"
-    restart: unless-stopped
-    networks:
-      - trading-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.2'
-          memory: 256M
-
-  # Loki for log aggregation
-  loki:
-    image: grafana/loki:2.8.3
-    container_name: ats-loki-logs
-    ports:
-      - "3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
-    volumes:
-      - loki-data:/loki
-    restart: unless-stopped
-    networks:
-      - trading-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
-
-  # Promtail for log collection
-  promtail:
-    image: grafana/promtail:2.8.3
-    container_name: ats-promtail-collector
-    volumes:
-      - logs:/var/logs
-      - /var/log:/host/var/log:ro
-      - ./monitoring/promtail/config.yml:/etc/promtail/config.yml
-    command: -config.file=/etc/promtail/config.yml
-    depends_on:
-      - loki
-    restart: unless-stopped
-    networks:
-      - trading-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.2'
-          memory: 256M
-
-  # Monitoring: AlertManager
-  alertmanager:
-    image: prom/alertmanager:latest
-    container_name: ats-alertmanager
-    volumes:
-      - ./monitoring/alertmanager:/etc/alertmanager
-    command:
-      - '--config.file=/etc/alertmanager/alertmanager.yml'
-      - '--storage.path=/alertmanager'
-    ports:
-      - "9093:9093"
-    environment:
-      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
-      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
-      - SLACK_CHANNEL=${SLACK_CHANNEL}
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9093/-/healthy || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-    depends_on:
-      prometheus:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - trading-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.2'
-          memory: 256M
-
-  # Monitoring: Grafana
+  # Grafana for dashboards
   grafana:
     image: grafana/grafana:latest
-    container_name: ats-grafana-dashboard
-    depends_on:
-      - prometheus
-      - loki
+    container_name: ats-grafana
     volumes:
-      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
-      - ./monitoring/grafana/provisioning/datasources/grafana_loki_datasource.yaml:/etc/grafana/provisioning/datasources/loki.yaml
-      - ./monitoring/grafana/provisioning/datasources/grafana_prometheus_datasource.yaml:/etc/grafana/provisioning/datasources/prometheus.yaml
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
       - grafana-data:/var/lib/grafana
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_AUTH_ANONYMOUS_ENABLED=false
-      - GF_INSTALL_PLUGINS=grafana-piechart-panel,jdbranham-diagram-panel,grafana-clock-panel
-      - GF_SMTP_ENABLED=${GRAFANA_SMTP_ENABLED:-false}
-      - GF_SMTP_HOST=${GRAFANA_SMTP_HOST:-smtp.example.com}
-      - GF_SMTP_USER=${GRAFANA_SMTP_USER:-grafana}
-      - GF_SMTP_PASSWORD=${GRAFANA_SMTP_PASSWORD:-}
-      - GF_SMTP_FROM_ADDRESS=${GRAFANA_SMTP_FROM:-grafana@example.com}
     ports:
       - "3001:3000"
     restart: unless-stopped
     networks:
       - trading-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
 
 volumes:
   timescaledb-data:
@@ -625,8 +318,6 @@ volumes:
   results:
   prometheus-data:
   grafana-data:
-  loki-data:
 
 networks:
   trading-network:
-    driver: bridge

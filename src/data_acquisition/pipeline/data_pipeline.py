@@ -13,7 +13,8 @@ from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 
-from src.trading_strategy.alpaca.alpaca_client import AlpacaClient
+# Use AlpacaAPIClient from utils.api instead of importing from trading_strategy
+from src.utils.api import AlpacaAPIClient
 from src.data_acquisition.api.polygon_client import (
     PolygonClient,
 )
@@ -41,7 +42,7 @@ class DataPipeline:
     def __init__(
         self,
         polygon_client: Optional[PolygonClient]= None,
-        alpaca_client: Optional[AlpacaClient] = None,
+        alpaca_client: Optional[AlpacaAPIClient] = None,
         unusual_whales_client: Optional[UnusualWhalesClient] = None,
         multi_timeframe_collector: Optional[MultiTimeframeDataCollector] = None,
         storage: Optional[TimescaleStorage] = None,
@@ -60,8 +61,8 @@ class DataPipeline:
         """
         self.polygon = polygon_client or PolygonClient()
         self.unusual_whales = unusual_whales_client or UnusualWhalesClient()
-        # Removed unusual_whales_wrapper reference
-        self.alpaca = alpaca_client or AlpacaClient()
+        # Make Alpaca client optional - only initialize if explicitly provided
+        self.alpaca = alpaca_client  # If None, it will stay None
 
         # Initialize multi-timeframe collector if not provided
         self.multi_timeframe_collector = (

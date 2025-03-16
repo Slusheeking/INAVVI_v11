@@ -12,7 +12,8 @@ from typing import Any, Dict, List, Optional, Union
 # Import pandas and numpy directly
 import pandas as pd
 
-from src.trading_strategy.alpaca.alpaca_client import AlpacaClient
+# Use AlpacaAPIClient from utils.api instead of importing from trading_strategy
+from src.utils.api import AlpacaAPIClient
 from src.data_acquisition.api.polygon_client import (
     PolygonClient
 )
@@ -30,7 +31,7 @@ class QuoteCollector:
     def __init__(
         self,
         polygon_client: Optional[PolygonClient] = None,
-        alpaca_client: Optional[AlpacaClient] = None,
+        alpaca_client: Optional[AlpacaAPIClient] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
         """
@@ -42,7 +43,7 @@ class QuoteCollector:
             config: Configuration dictionary with options like max_threads
         """
         self.polygon = polygon_client or PolygonClient()
-        self.alpaca = alpaca_client or AlpacaClient()
+        self.alpaca = alpaca_client or AlpacaAPIClient()
         self.config = config or {}
 
         # Set up thread pool for parallel data collection

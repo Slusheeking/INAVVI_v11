@@ -8,7 +8,8 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Union
-from src.trading_strategy.alpaca.alpaca_client import AlpacaClient
+# Use AlpacaAPIClient from utils.api instead of importing from trading_strategy
+from src.utils.api import AlpacaAPIClient
 from src.data_acquisition.api.polygon_client import PolygonClient
 
 # Import pandas and numpy directly
@@ -27,7 +28,7 @@ class PriceCollector:
     def __init__(
         self,
         polygon_client: Optional[PolygonClient] = None,
-        alpaca_client: Optional[AlpacaClient] = None,
+        alpaca_client: Optional[AlpacaAPIClient] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
         """
@@ -39,7 +40,7 @@ class PriceCollector:
             config: Configuration dictionary with options like max_threads
         """
         self.polygon = polygon_client or PolygonClient()
-        self.alpaca = alpaca_client or AlpacaClient()
+        self.alpaca = alpaca_client or AlpacaAPIClient()
         self.config = config or {}
 
         # Set up thread pool for parallel data collection

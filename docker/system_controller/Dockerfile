@@ -17,8 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libc6-dev \
     linux-libc-dev \
     libstdc++-11-dev \
-    nvidia-cuda-toolkit \
     && rm -rf /var/lib/apt/lists/*
+
+# Set CUDA environment variables
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib:$LD_LIBRARY_PATH
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
@@ -52,10 +54,14 @@ RUN groupadd -g 1000 appuser && \
 
 # Copy application code
 COPY --chown=appuser:appuser src/utils /app/src/utils
+# Copy common scripts
 COPY --chown=appuser:appuser src/system_controller /app/src/system_controller
 COPY --chown=appuser:appuser docker/system_controller/start.sh /app/start.sh
+# Copy common scripts
+COPY docker/common /app/docker/common
 
-# Make start script executable
+# Set executable permissions
+RUN chmod +x /app/docker/common/*.sh
 RUN chmod +x /app/start.sh
 
 # Switch to non-root user

@@ -1,66 +1,43 @@
 #!/bin/bash
+
+# Set service name for logging
+export SERVICE_NAME="System Controller"
+
+# Source common scripts
+source /app/docker/common/dependency_check.sh
+source /app/docker/common/validate_env.sh
+
+# Initialize health as starting
+set_health_status "starting" 
+
+# Check critical dependencies
+echo "[INFO] Checking critical dependencies for $SERVICE_NAME..."
+check_timescaledb true
+
+# Check non-critical dependencies
+echo "[INFO] Checking non-critical dependencies for $SERVICE_NAME..."
+check_redis false
+REDIS_AVAILABLE=$?
+
+# Set feature flags based on dependency availability
+if [ $REDIS_AVAILABLE -eq 0 ]; then
+  set_feature_flag "redis_caching" 1 "/app/feature_flags.json" "Redis connection successful"
+else
+  set_feature_flag "redis_caching" 0 "/app/feature_flags.json" "Redis connection failed"
+fi
+
 set -e
 
 # Print environment information
-echo "Starting System Controller Service"
-echo "Environment: $ENVIRONMENT"
-echo "Log Level: $LOG_LEVEL"
+echo "[INFO] Starting $SERVICE_NAME"
+echo "[INFO] Environment: $ENVIRONMENT"
+echo "[INFO] Log Level: $LOG_LEVEL"
 
 # Create necessary directories
 mkdir -p /app/logs
 
-# Wait for TimescaleDB with timeout and backoff
-echo "Waiting for TimescaleDB..."
-MAX_RETRIES=30
-RETRY_INTERVAL=2
-RETRY_COUNT=0
-
-until PGPASSWORD=$TIMESCALEDB_PASSWORD psql -h $TIMESCALEDB_HOST -U $TIMESCALEDB_USER -d $TIMESCALEDB_DATABASE -c '\q'; do
-    RETRY_COUNT=$((RETRY_COUNT+1))
-    if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-        echo "Failed to connect to TimescaleDB after $MAX_RETRIES attempts. Exiting."
-        exit 1
-    fi
-    echo "Waiting for TimescaleDB... (Attempt $RETRY_COUNT/$MAX_RETRIES)"
-    sleep $RETRY_INTERVAL
-    # Exponential backoff
-    RETRY_INTERVAL=$((RETRY_INTERVAL*2))
-    if [ $RETRY_INTERVAL -gt 30 ]; then
-        RETRY_INTERVAL=30
-    fi
-done
-
-echo "TimescaleDB connection successful"
-
-# Wait for Redis with timeout and backoff
-echo "Waiting for Redis..."
-MAX_RETRIES=30
-RETRY_INTERVAL=2
-RETRY_COUNT=0
-
-# Always use netcat for Redis connectivity check instead of relying on redis-cli
-echo "Checking Redis connection using netcat..."
-until nc -z $REDIS_HOST $REDIS_PORT; do
-    RETRY_COUNT=$((RETRY_COUNT+1))
-    if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-        echo "Failed to connect to Redis after $MAX_RETRIES attempts. Exiting."
-        exit 1
-    fi
-    echo "Waiting for Redis... (Attempt $RETRY_COUNT/$MAX_RETRIES)"
-    sleep $RETRY_INTERVAL
-    # Exponential backoff
-    RETRY_INTERVAL=$((RETRY_INTERVAL*2))
-    if [ $RETRY_INTERVAL -gt 30 ]; then
-        RETRY_INTERVAL=30
-    fi
-done
-# If we reach here, Redis port is open
-echo "Redis port is open, connection is successful"
-
-echo "Redis connection successful"
-
 # Initialize system state in database if needed
-echo "Initializing system state..."
+echo "[INFO] Initializing system state in database..."
 PGPASSWORD=$TIMESCALEDB_PASSWORD psql -h $TIMESCALEDB_HOST -U $TIMESCALEDB_USER -d $TIMESCALEDB_DATABASE -c "
 CREATE TABLE IF NOT EXISTS system_state (
     id SERIAL PRIMARY KEY,
@@ -91,8 +68,26 @@ END
 \$\$;
 "
 
-echo "System state initialized"
+echo "[INFO] System state initialized"
+
+# Record system startup event
+echo "[INFO] Recording system startup event..."
+PGPASSWORD=$TIMESCALEDB_PASSWORD psql -h $TIMESCALEDB_HOST -U $TIMESCALEDB_USER -d $TIMESCALEDB_DATABASE -c "
+INSERT INTO system_events (component, event_type, severity, message, details)
+VALUES ('$SERVICE_NAME', 'startup', 'info', 'Service starting', 
+        '{\"environment\": \"$ENVIRONMENT\", \"redis_available\": $REDIS_AVAILABLE}'::jsonb);
+"
 
 # Start the system controller service
-echo "Starting system controller service..."
+echo "[INFO] Starting $SERVICE_NAME main process..."
+# If all critical dependencies are available, mark as healthy
+# Otherwise, mark as degraded but continue
+if [ $REDIS_AVAILABLE -eq 0 ]; then
+  set_health_status "healthy"
+else
+  set_health_status "degraded"
+  echo "[WARN] Service starting in degraded mode due to missing non-critical dependencies"
+fi
+
+echo "[INFO] Executing main Python module..."
 exec python -m src.system_controller.main
