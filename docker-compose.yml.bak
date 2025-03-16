@@ -1,0 +1,334 @@
+version: '3.8'
+
+services:
+  # Database
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: ats-timescaledb
+    environment:
+      - POSTGRES_USER=${TIMESCALEDB_USER}
+      - POSTGRES_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - POSTGRES_DB=${TIMESCALEDB_DATABASE}
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+      - ./docker/timescaledb/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5433:5432"  # Map to port 5433 on the host to avoid conflicts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TIMESCALEDB_USER} -d ${TIMESCALEDB_DATABASE}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - trading-network
+
+  # Redis for caching and pub/sub
+  redis:
+    image: redis:7-alpine
+    container_name: ats-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "${REDIS_PORT}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - trading-network
+
+  # System Controller
+  system-controller:
+    build:
+      context: .
+      dockerfile: docker/system_controller/Dockerfile
+    image: autonomous_trading_system/system-controller:${VERSION}
+    container_name: ats-system-controller
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT}
+      - TIMESCALEDB_HOST=timescaledb
+      - TIMESCALEDB_PORT=5432
+      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
+      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
+      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - TZ=${TZ}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_CHANNEL=${SLACK_CHANNEL}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+    volumes:
+      - logs:/app/logs
+      - ./config:/app/config:ro
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - trading-network
+
+  # Data Pipeline (combines data-acquisition and data-processing)
+  data-pipeline:
+    build:
+      context: .
+      dockerfile: docker/data_pipeline/Dockerfile
+    image: autonomous_trading_system/data-pipeline:${VERSION}
+    container_name: ats-data-pipeline
+    depends_on:
+      system-controller:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT}
+      - VALIDATE_APIS=true
+      - TIMESCALEDB_HOST=timescaledb
+      - TIMESCALEDB_PORT=5432
+      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
+      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
+      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - POLYGON_WEBSOCKET_BUFFER_SIZE=${POLYGON_WEBSOCKET_BUFFER_SIZE}
+      - POLYGON_WEBSOCKET_USE_COMPRESSION=${POLYGON_WEBSOCKET_USE_COMPRESSION}
+      - UNUSUAL_WHALES_API_KEY=${UNUSUAL_WHALES_API_KEY}
+      - UNUSUAL_WHALES_CACHE_RESULTS=${UNUSUAL_WHALES_CACHE_RESULTS}
+      - UNUSUAL_WHALES_CACHE_TTL_HIGH_PRIORITY=${UNUSUAL_WHALES_CACHE_TTL_HIGH_PRIORITY}
+      - UNUSUAL_WHALES_CACHE_TTL_NORMAL=${UNUSUAL_WHALES_CACHE_TTL_NORMAL}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - TZ=${TZ}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_CHANNEL=${SLACK_CHANNEL}
+    volumes:
+      - logs:/app/logs
+      - data:/app/data
+      - ./config:/app/config:ro
+    ports:
+      - "8001:8001"
+      - "8006:8006"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - trading-network
+
+  # Model Platform (combines model-training, model-services, and continuous-learning)
+  model-platform:
+    build:
+      context: .
+      dockerfile: docker/model_platform/Dockerfile
+    image: autonomous_trading_system/model-platform:${VERSION}
+    container_name: ats-model-platform
+    depends_on:
+      system-controller:
+        condition: service_healthy
+      data-pipeline:
+        condition: service_healthy
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT}
+      - VALIDATE_APIS=false
+      - TIMESCALEDB_HOST=timescaledb
+      - TIMESCALEDB_PORT=5432
+      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
+      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
+      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - MODEL_REGISTRY_PATH=${MODEL_REGISTRY_PATH}
+      - MODEL_CHECKPOINT_PATH=${MODEL_CHECKPOINT_PATH}
+      - MODEL_SERVING_PORT=${MODEL_SERVING_PORT}
+      - GPU_ENABLED=${GPU_ENABLED}
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - TZ=${TZ}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_CHANNEL=${SLACK_CHANNEL}
+    volumes:
+      - logs:/app/logs
+      - models:/app/models
+      - data:/app/data
+      - results:/app/results
+      - ./config:/app/config:ro
+    ports:
+      - "8003:8003"
+      - "8005:8005"
+      - "8500:8500"
+      - "8501:8501"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - trading-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+
+      - trading-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+
+  # Feature Trading (combines feature-engineering and trading-strategy)
+  feature-trading:
+    build:
+      context: .
+      dockerfile: docker/feature_trading/Dockerfile
+    image: autonomous_trading_system/feature-trading:${VERSION}
+    container_name: ats-feature-trading
+    depends_on:
+      data-pipeline:
+        condition: service_healthy
+      model-platform:
+        condition: service_healthy
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT}
+      - VALIDATE_APIS=true
+      - TIMESCALEDB_HOST=timescaledb
+      - TIMESCALEDB_PORT=5432
+      - TIMESCALEDB_DATABASE=${TIMESCALEDB_DATABASE}
+      - TIMESCALEDB_USER=${TIMESCALEDB_USER}
+      - TIMESCALEDB_PASSWORD=${TIMESCALEDB_PASSWORD}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - FEATURE_STORE_PATH=${FEATURE_STORE_PATH}
+      - FEATURE_CACHE_ENABLED=${FEATURE_CACHE_ENABLED}
+      - FEATURE_CACHE_TTL=${FEATURE_CACHE_TTL}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - ALPACA_API_BASE_URL=${ALPACA_API_BASE_URL}
+      - MAX_POSITION_SIZE=${MAX_POSITION_SIZE}
+      - RISK_PERCENTAGE=${RISK_PERCENTAGE}
+      - MAX_POSITIONS=${MAX_POSITIONS}
+      - MAX_POSITION_VALUE=${MAX_POSITION_VALUE}
+      - MAX_DAILY_VALUE=${MAX_DAILY_VALUE}
+      - GPU_ENABLED=${GPU_ENABLED}
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - TZ=${TZ}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_CHANNEL=${SLACK_CHANNEL}
+    volumes:
+      - logs:/app/logs
+      - data:/app/data
+      - features:/app/features
+      - ./config:/app/config:ro
+    ports:
+      - "8004:8004"
+      - "8002:8002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - trading-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+
+      - trading-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+
+  # Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ats-prometheus
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    networks:
+      - trading-network
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ats-grafana
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+    networks:
+      - trading-network
+
+volumes:
+  timescaledb-data:
+  redis-data:
+  logs:
+  data:
+  models:
+  features:
+  results:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  trading-network:
+    driver: bridge
