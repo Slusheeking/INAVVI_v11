@@ -15,6 +15,7 @@ import hashlib
 import pickle
 import logging
 import asyncio
+import psutil
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
@@ -32,8 +33,19 @@ import queue
 import cupy as cp
 import random
 
+# Try to import market hours handler
+try:
+    from market_hours_handler import market_hours_handler
+    MARKET_HOURS_HANDLER_AVAILABLE = True
+    logger = logging.getLogger('polygon_ultra')
+    logger.info("Market hours handler loaded successfully")
+except ImportError:
+    MARKET_HOURS_HANDLER_AVAILABLE = False
+    market_hours_handler = None
+    logger = logging.getLogger('polygon_ultra')
+    logger.info("Market hours handler not available, using fallback market status")
+
 # Use CuPy for all GPU operations
-logger = logging.getLogger('polygon_ultra')
 logger.info("Using CuPy for all GPU operations")
 
 # Configure logging
@@ -44,7 +56,7 @@ logging.basicConfig(
 
 # Environment variables
 # Try to use a valid API key - first check environment, then try a default
-POLYGON_API_KEY = os.environ.get('POLYGON_API_KEY', 'YOUR_API_KEY_HERE')
+POLYGON_API_KEY = os.environ.get('POLYGON_API_KEY', 'wFvpCGZq4glxZU_LlRc2Qpw6tQGB5Fmf')
 logger.info("Using Polygon API key from environment variable")
 # Make Redis optional - default to None to disable Redis if not available
 REDIS_HOST = os.environ.get('REDIS_HOST', None)
@@ -57,8 +69,7 @@ CONNECTION_TIMEOUT = int(os.environ.get('CONNECTION_TIMEOUT', 15))
 MAX_RETRIES = int(os.environ.get('MAX_RETRIES', 5))
 RETRY_BACKOFF_FACTOR = float(os.environ.get('RETRY_BACKOFF_FACTOR', 0.5))
 NUM_WORKERS = int(os.environ.get('NUM_WORKERS', mp.cpu_count()))
-QUEUE_SIZE = int(os.environ.get('QUEUE_SIZE', 10000)
-                 )  # Further increased queue size
+QUEUE_SIZE = int(os.environ.get('QUEUE_SIZE', 10000))  # Further increased queue size
 BATCH_SIZE = int(os.environ.get('BATCH_SIZE', 1024))  # Increased batch size
 MAX_DATA_POINTS = int(os.environ.get(
     'MAX_DATA_POINTS', 50000))  # Increased data points
@@ -213,6 +224,50 @@ class OptimizedConnectionPool:
         self.session.close()
 
 
+def log_memory_usage(location_tag):
+    """Log CPU and GPU memory usage"""
+    try:
+        # Log CPU memory
+        process = psutil.Process()
+        cpu_mem = process.memory_info().rss / (1024 * 1024)
+        
+        # Log GPU memory
+        mem_info = cp.cuda.runtime.memGetInfo()
+        free, total = mem_info[0], mem_info[1]
+        used = total - free
+        
+        logger.info(f"[{location_tag}] Memory Usage - CPU: {cpu_mem:.2f}MB, GPU: Used={used/(1024**2):.2f}MB, Free={free/(1024**2):.2f}MB, Total={total/(1024**2):.2f}MB")
+    except Exception as e:
+        logger.error(f"Failed to log memory usage at {location_tag}: {e}")
+
+
+def monitor_worker_processes():
+    """Monitor worker processes and their resource usage"""
+    try:
+        process = psutil.Process()
+        children = process.children(recursive=True)
+        logger.info(f"Active child processes: {len(children)}")
+        for i, child in enumerate(children):
+            try:
+                logger.info(f"  Child {i}: PID={child.pid}, Status={child.status()}, CPU={child.cpu_percent()}, Memory={child.memory_info().rss/(1024*1024):.2f}MB")
+            except psutil.NoSuchProcess:
+                logger.warning(f"  Child {i}: PID={child.pid} - Process no longer exists")
+    except Exception as e:
+        logger.error(f"Failed to monitor worker processes: {e}")
+
+
+def configure_cupy():
+    """Configure CuPy for optimal performance on GH200"""
+    try:
+        # Use unified memory for better performance
+        cp.cuda.set_allocator(cp.cuda.MemoryPool(cp.cuda.malloc_managed).malloc)
+        logger.info("CuPy configured with unified memory")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to configure CuPy: {e}")
+        return False
+
+
 class AsyncProcessingPipeline:
     """Asynchronous processing pipeline for data processing"""
 
@@ -235,6 +290,7 @@ class AsyncProcessingPipeline:
 
     def start(self, worker_func):
         """Start processing pipeline"""
+        monitor_worker_processes()
         for i in range(self.num_workers):
             worker = mp.Process(
                 target=self._worker_loop,
@@ -252,15 +308,10 @@ class AsyncProcessingPipeline:
         logger.info(f"Worker {worker_id} started")
 
         # Configure CuPy for this worker
-        try:
-            # Use unified memory for better performance
-            cp.cuda.set_allocator(cp.cuda.MemoryPool(
-                cp.cuda.malloc_managed).malloc)
-            logger.info(
-                f"Worker {worker_id} configured CuPy with unified memory")
-        except Exception as e:
-            logger.warning(
-                f"Failed to configure CuPy in worker {worker_id}: {e}")
+        cupy_configured = configure_cupy()
+        if cupy_configured:
+            logger.info(f"Worker {worker_id} configured CuPy successfully")
+        
 
         while running.value:
             try:
@@ -271,10 +322,14 @@ class AsyncProcessingPipeline:
                     continue
 
                 # Process task
+                log_memory_usage(f"worker_{worker_id}_before_processing")
                 result = worker_func(task)
+                log_memory_usage(f"worker_{worker_id}_after_processing")
 
                 # Put result in output queue
                 output_queue.put(result)
+                
+                # Monitor memory periodically
             except Exception as e:
                 logger.error(f"Error in worker {worker_id}: {e}")
 
@@ -310,6 +365,7 @@ class AsyncProcessingPipeline:
             if worker.is_alive():
                 worker.terminate()
 
+        monitor_worker_processes()
         logger.info("Processing pipeline stopped")
 
 
@@ -358,13 +414,8 @@ class PolygonDataSourceUltra:
                 logger.warning(f"Memory growth configuration failed: {e}")
 
         # Configure CuPy for main process
-        try:
-            # Use unified memory for better performance
-            cp.cuda.set_allocator(cp.cuda.MemoryPool(
-                cp.cuda.malloc_managed).malloc)
-            logger.info("CuPy configured with unified memory")
-        except Exception as e:
-            logger.warning(f"Failed to configure CuPy: {e}")
+        configure_cupy()
+        log_memory_usage("initialization")
 
         logger.info("Ultra-optimized Polygon data source initialized")
 
@@ -686,6 +737,70 @@ class PolygonDataSourceUltra:
         # Return empty DataFrame after all retries
         return pd.DataFrame()
 
+    def get_market_status(self):
+        """
+        Get the current market status
+        
+        Returns:
+            dict: Market status information
+        """
+        try:
+            # Make request to market status endpoint
+            endpoint = "v1/marketstatus/now"
+            data = self._make_request(endpoint)
+
+            if data and "status" in data and data["status"] == "OK":
+                logger.info(f"Market status retrieved: {data.get('market')}")
+                return data
+            else:
+                logger.warning(f"Failed to get market status: {data.get('error', 'Unknown error')}")
+                # Use market hours handler if available
+                if MARKET_HOURS_HANDLER_AVAILABLE and market_hours_handler:
+                    logger.info("Using market hours handler for market status")
+                    return market_hours_handler.get_market_status()
+                else:
+                    # Fallback to hardcoded market status
+                    logger.info("Using hardcoded fallback market status")
+                    return {
+                        "status": "OK",
+                        "market": "closed",
+                        "serverTime": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "exchanges": {
+                            "nyse": "closed",
+                            "nasdaq": "closed",
+                            "otc": "closed"
+                        },
+                        "currencies": {
+                            "fx": "open",
+                            "crypto": "open"
+                        },
+                        "is_fallback": True
+                    }
+        except Exception as e:
+            logger.error(f"Error getting market status: {e}")
+            # Use market hours handler if available
+            if MARKET_HOURS_HANDLER_AVAILABLE and market_hours_handler:
+                logger.info("Using market hours handler for market status after error")
+                return market_hours_handler.get_market_status()
+            else:
+                # Fallback to hardcoded market status
+                logger.info("Using hardcoded fallback market status after error")
+                return {
+                    "status": "OK",
+                    "market": "closed",
+                    "serverTime": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "exchanges": {
+                        "nyse": "closed",
+                        "nasdaq": "closed",
+                        "otc": "closed"
+                    },
+                    "currencies": {
+                        "fx": "open",
+                        "crypto": "open"
+                    },
+                    "is_fallback": True
+                }
+
     def get_aggregates_batch(self, tickers, multiplier=1, timespan="minute",
                              from_date=None, to_date=None, limit=MAX_DATA_POINTS, adjusted=True):
         """
@@ -762,6 +877,7 @@ class PolygonDataSourceUltra:
         """
         if not data:
             return {}
+        log_memory_usage("before_process_data_with_gpu")
 
         # Process each ticker
         results = {}
@@ -789,6 +905,8 @@ class PolygonDataSourceUltra:
                 ticker = result['ticker']
                 results[ticker] = result['result']
 
+        log_memory_usage("after_process_data_with_gpu")
+
         return results
 
     def _process_data_worker(self, task):
@@ -808,9 +926,11 @@ class PolygonDataSourceUltra:
             close_prices = np.array(df['close'].values, dtype=np.float64)
             volumes = np.array(df['volume'].values, dtype=np.float64)
 
+            log_memory_usage(f"before_process_with_cupy_{ticker}")
             # Process data using CuPy
             sma5, sma20, vwap, rsi = self._process_with_cupy(
                 close_prices, volumes)
+            log_memory_usage(f"after_process_with_cupy_{ticker}")
 
             # Create result DataFrame
             result_df = pd.DataFrame({
@@ -893,6 +1013,8 @@ class PolygonDataSourceUltra:
 
     def close(self):
         """Close all connections and resources"""
+        log_memory_usage("before_close")
+
         # Close connection pool
         self.connection_pool.close()
 
@@ -908,6 +1030,8 @@ class PolygonDataSourceUltra:
             logger.info("CuPy memory pool cleared")
         except Exception as e:
             logger.warning(f"Error clearing CuPy memory pool: {e}")
+
+        log_memory_usage("after_close")
 
         logger.info("Closed all connections and resources")
 

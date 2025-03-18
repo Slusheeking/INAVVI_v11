@@ -41,42 +41,41 @@ RUN pip install --upgrade pip && pip install --no-cache-dir \
     cupy-cuda12x \
     pycuda \
     polygon-api-client \
+    alpaca-trade-api \
     ipywidgets \
     nvidia-ml-py3 \
     packaging \
-    pytz
+    pytz \
+    aiohttp \
+    xgboost \
+    schedule \
+    slack-sdk
 
 # Create a working directory
 WORKDIR /app
 
-# Copy only Polygon-related files
-COPY polygon_data_source.py /app/
-COPY polygon_data_source_gh200.py /app/
-COPY polygon_data_source_gh200_fixed.py /app/
-COPY polygon_data_source_enhanced.py /app/
-COPY polygon_data_source_ultra.py /app/
-COPY polygon_data_source_turbo.py /app/
-COPY polygon_data_source_turbo_fixed.py /app/
-COPY polygon_benchmark.py /app/
-COPY polygon_benchmark_fixed.py /app/
-COPY enhanced_benchmark.py /app/
-COPY compare_implementations.py /app/
-COPY financial_cuda_ops.py /app/
-COPY test_ml_setup.py /app/
-COPY ml_trading_models.py /app/
-COPY data_ingestion_api_clients.py /app/
-COPY test_data_ingestion_system.py /app/
-COPY market_hours_handler.py /app/
-COPY load_env.py /app/
-COPY .env /app/
+# Copy environment file
+COPY .env /app/.env
+
+# Copy trading system files
+COPY . /app/tests/
 
 # Make sure the environment file is readable
 RUN chmod 644 /app/.env
 
+# Create necessary directories
+RUN mkdir -p /app/models /app/data /app/logs
+
 # Verify NVIDIA drivers and TensorFlow GPU support
 RUN ldconfig && \
-    echo "Testing NVIDIA driver installation..." && \
-    python -c "import tensorflow as tf; import cupy as cp; print('TensorFlow version:', tf.__version__); print('CuPy version:', cp.__version__); print('GPU available:', tf.config.list_physical_devices('GPU'))"
+    echo "Testing NVIDIA driver installation and GPU support..." && \
+    python -c "import tensorflow as tf; import cupy as cp; \
+    print('TensorFlow version:', tf.__version__); \
+    print('CuPy version:', cp.__version__); \
+    print('GPU available:', tf.config.list_physical_devices('GPU')); \
+    # Run a simple test operation to verify GPU functionality \
+    with tf.device('/GPU:0' if tf.config.list_physical_devices('GPU') else '/CPU:0'): \
+        print('Test matrix multiplication result:', tf.matmul(tf.constant([[1.0, 2.0], [3.0, 4.0]]), tf.constant([[5.0, 6.0], [7.0, 8.0]])).numpy())"
 
 # Set up entry point
 CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", "--NotebookApp.token=''"]

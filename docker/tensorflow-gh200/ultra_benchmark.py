@@ -21,6 +21,9 @@ import os
 import tensorflow as tf
 import argparse
 
+# Import load_env to load environment variables from .env file
+import load_env
+
 # Import implementations
 from polygon_data_source_turbo_fixed import PolygonDataSourceTurboFixed
 from polygon_data_source_ultra import PolygonDataSourceUltra

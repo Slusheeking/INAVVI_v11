@@ -1,0 +1,362 @@
+version: '3.8'
+
+services:
+  # Redis service for data storage and inter-component communication
+  redis:
+    image: redis:7.0-alpine
+    container_name: trading_redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - trading_network
+
+  # Data ingestion service
+  data_ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading_data_ingestion
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PORT_HOST=6380
+      - REDIS_DB=0
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - UNUSUAL_WHALES_API_KEY=${UNUSUAL_WHALES_API_KEY}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - ALPACA_API_URL=${ALPACA_API_URL:-https://paper-api.alpaca.markets}
+      - USE_GPU=${USE_GPU:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./:/app
+      - model_cache:/app/models
+    command: python -m tests.data_pipeline_integration
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, utility, compute, graphics]
+    networks:
+      - trading_network
+
+  # Model inference service
+  model_inference:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading_model_inference
+    depends_on:
+      redis:
+        condition: service_healthy
+      data_ingestion:
+        condition: service_started
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PORT_HOST=6380
+      - REDIS_DB=0
+      - USE_GPU=${USE_GPU:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./:/app
+      - model_cache:/app/models
+    command: python -m tests.model_integration_system
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - trading_network
+
+  # Execution service
+  execution:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading_execution
+    depends_on:
+      redis:
+        condition: service_healthy
+      model_inference:
+        condition: service_started
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PORT_HOST=6380
+      - REDIS_DB=0
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - ALPACA_API_URL=${ALPACA_API_URL:-https://paper-api.alpaca.markets}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./:/app
+    command: python -m tests.execution_system
+    restart: unless-stopped
+    networks:
+      - trading_network
+
+  # Monitoring service
+  monitoring:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading_monitoring
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PORT_HOST=6380
+      - REDIS_DB=0
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"  # Prometheus metrics endpoint
+    volumes:
+      - ./:/app
+    command: python -m tests.monitoring_system
+    restart: unless-stopped
+    networks:
+      - trading_network
+
+  # ML model trainer service (GPU-accelerated)
+  ml_trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading_ml_trainer
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PORT_HOST=6380
+      - REDIS_DB=0
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - UNUSUAL_WHALES_API_KEY=${UNUSUAL_WHALES_API_KEY}
+      - USE_GPU=true
+      - MODELS_DIR=/app/models
+      - DATA_DIR=/app/data
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./:/app
+      - ./models:/app/models
+      - ./data:/app/data
+    command: bash /app/tests/run_ml_trainer.sh
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, utility, compute, graphics]
+    restart: on-failure
+    networks:
+      - trading_network
+
+  # Continual learning service
+  continual_learning:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading_continual_learning
+    depends_on:
+      redis:
+        condition: service_healthy
+      ml_trainer:
+        condition: service_started
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PORT_HOST=6380
+      - REDIS_DB=0
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - UNUSUAL_WHALES_API_KEY=${UNUSUAL_WHALES_API_KEY}
+      - MODELS_DIR=/app/models
+      - DATA_DIR=/app/data
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./:/app
+      - ./models:/app/models
+      - ./data:/app/data
+    # This service will be started by the integrated trading system
+    # and doesn't need its own command
+    restart: on-failure
+    networks:
+      - trading_network
+
+  # Integrated trading system service
+  trading_system:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading_system
+    depends_on:
+      redis:
+        condition: service_healthy
+      data_ingestion:
+        condition: service_started
+      model_inference:
+        condition: service_started
+      execution:
+        condition: service_started
+      continual_learning:
+        condition: service_started
+      monitoring:
+        condition: service_started
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PORT_HOST=6380
+      - REDIS_DB=0
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - UNUSUAL_WHALES_API_KEY=${UNUSUAL_WHALES_API_KEY}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - ALPACA_API_URL=${ALPACA_API_URL:-https://paper-api.alpaca.markets}
+      - USE_GPU=${USE_GPU:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./:/app
+      - model_cache:/app/models
+      - ./config:/app/config
+    command: python -m tests.integrated_trading_system --config /app/config/trading_system_config.json
+    restart: unless-stopped
+    ports:
+      - "8080:8080"  # API port for external access
+    networks:
+      - trading_network
+
+  # Reporting service
+  reporting:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading_reporting
+    depends_on:
+      redis:
+        condition: service_healthy
+      monitoring:
+        condition: service_started
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PORT_HOST=6380
+      - REDIS_DB=0
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_WEBHOOK_SYSTEM_NOTIFICATIONS=${SLACK_WEBHOOK_SYSTEM_NOTIFICATIONS}
+      - SLACK_WEBHOOK_REPORTS=${SLACK_WEBHOOK_REPORTS}
+      - SLACK_WEBHOOK_PORTFOLIO=${SLACK_WEBHOOK_PORTFOLIO}
+      - SLACK_WEBHOOK_CURRENT_POSITIONS=${SLACK_WEBHOOK_CURRENT_POSITIONS}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./:/app
+      - model_cache:/app/models
+    command: python -m tests.reporting_system
+    restart: unless-stopped
+    networks:
+      - trading_network
+
+  # Monitoring service (Prometheus)
+  prometheus:
+    image: prom/prometheus:v2.40.0
+    container_name: trading_prometheus
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    networks:
+      - trading_network
+
+  # Visualization service (Grafana)
+  grafana:
+    image: grafana/grafana:9.3.0
+    container_name: trading_grafana
+    depends_on:
+      - prometheus
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    networks:
+      - trading_network
+
+  # Jupyter Notebook for analysis and development
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading_jupyter
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PORT_HOST=6380
+      - REDIS_DB=0
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - UNUSUAL_WHALES_API_KEY=${UNUSUAL_WHALES_API_KEY}
+      - USE_GPU=${USE_GPU:-true}
+    volumes:
+      - ./:/app
+      - model_cache:/app/models
+      - ./notebooks:/app/notebooks
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='${JUPYTER_TOKEN:-trading}' --notebook-dir=/app/notebooks
+    ports:
+      - "8888:8888"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - trading_network
+
+volumes:
+  redis_data:
+  model_cache:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  trading_network:
+    driver: bridge

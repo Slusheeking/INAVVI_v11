@@ -32,6 +32,9 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - TF_FORCE_GPU_ALLOW_GROWTH=true
+      # API Keys
+      - POLYGON_API_KEY=wFvpCGZq4glxZU_LlRc2Qpw6tQGB5Fmf
+      - UNUSUAL_WHALES_API_KEY=4ad71b9e-7ace-4f24-bdfc-532ace219a18
       # Redis configuration
       - REDIS_HOST=redis
       - REDIS_PORT=6379

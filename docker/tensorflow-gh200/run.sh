@@ -36,6 +36,7 @@ function show_usage {
     echo -e "  large-scale   Run large-scale benchmark with many symbols"
     echo -e "  turbo        Run turbo-charged Polygon.io implementation"
     echo -e "  ultra        Run ultra-optimized Polygon.io implementation"
+    echo -e "  ultra-test   Run enhanced tests for ultra implementation with memory monitoring"
     echo -e "  compare     Run both benchmarks and compare results"
     echo -e "  view-results  View the latest benchmark results"
     echo -e "  clean       Clean up benchmark results"
@@ -122,6 +123,49 @@ function run_ultra_implementation {
     echo -e "${BLUE}This implementation includes custom CUDA kernels, shared memory parallelism, zero-copy memory, and async processing${NC}"
     docker exec -it tensorflow-gh200 python /app/ultra_benchmark.py --symbols 5
     echo -e "${GREEN}Ultra implementation complete!${NC}"
+}
+
+# Function to run ultra implementation enhancements test
+function run_ultra_enhancements_test {
+    echo -e "${GREEN}Running ultra-optimized Polygon.io implementation enhancements test...${NC}"
+    
+    # Parse test type
+    TEST_TYPE=${2:-"basic"}
+    
+    # Parse additional arguments
+    EXTRA_ARGS=""
+    
+    if [ "$3" == "websocket" ]; then
+        EXTRA_ARGS="--websocket"
+        echo -e "${BLUE}Testing Polygon WebSocket functionality${NC}"
+    elif [ "$3" == "unusual-whales" ]; then
+        EXTRA_ARGS="--unusual-whales"
+        echo -e "${BLUE}Testing Unusual Whales API functionality${NC}"
+    else
+        echo -e "${BLUE}Running standard test with memory monitoring and resource management${NC}"
+    fi
+    
+    if [ "$4" == "live" ]; then
+        EXTRA_ARGS="${EXTRA_ARGS} --use-mock false"
+        echo -e "${YELLOW}Using live data (if available)${NC}"
+    else
+        echo -e "${BLUE}Using mock data for testing during non-market hours${NC}"
+    fi
+    
+    # Copy the test files to the container
+    echo -e "${BLUE}Copying test files to container...${NC}"
+    docker cp docker/tensorflow-gh200/test_ultra_enhancements.py tensorflow-gh200:/app/test_ultra_enhancements.py
+    # Copy the enhanced polygon_data_source_ultra.py file
+    docker cp docker/tensorflow-gh200/polygon_data_source_ultra.py tensorflow-gh200:/app/polygon_data_source_ultra.py
+    
+    # Install required packages
+    echo -e "${BLUE}Installing required packages...${NC}"
+    docker exec -it tensorflow-gh200 pip install psutil
+    docker exec -it tensorflow-gh200 pip install websockets requests
+    
+    # Run the test
+    docker exec -it tensorflow-gh200 python /app/test_ultra_enhancements.py --test ${TEST_TYPE} ${EXTRA_ARGS}
+    echo -e "${GREEN}Ultra enhancements test complete!${NC}"
 }
 
 # Function to run scaling test
@@ -237,6 +281,9 @@ case "$1" in
         ;;
     ultra)
         run_ultra_implementation
+        ;;
+    ultra-test)
+        run_ultra_enhancements_test $@
         ;;
     scaling-test)
         run_scaling_test
