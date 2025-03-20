@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "trading_system"
+    static_configs:
+      - targets: ["localhost:9121"] # Redis Exporter
+        labels:
+          service: "trading_system"
+
+  - job_name: "redis"
+    static_configs:
+      - targets: ["localhost:6379"]
+        labels:
+          service: "redis"
+
+  - job_name: "node"
+    static_configs:
+      - targets: ["localhost:9100"] # Node Exporter
+        labels:
+          service: "node"

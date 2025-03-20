@@ -105,4 +105,27 @@ events.out.tfevents.*
 # Exceptions - keep these files
 !requirements.txt
 !docker-compose.yml
-!.env.example
+!.env.example# Environment variables
+.env
+
+# Data and cache directories
+data/
+data/cache/
+
+# Model files
+models/
+
+# Log files
+logs/
+
+# Redis data
+redis/data/
+
+# Prometheus data
+prometheus/data/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
