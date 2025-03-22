@@ -1,0 +1,322 @@
+# Pull the latest TensorFlow container with CUDA 12.4 support for NVIDIA GH200 Grace Hopper Superchips
+FROM nvcr.io/nvidia/tensorflow:24.02-tf2-py3
+
+# Install required system packages including Redis and Prometheus
+# Install system packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    wget \
+    python3-dev \
+    redis-server \
+    prometheus \
+    prometheus-node-exporter \
+    supervisor \
+    curl \
+    libpq-dev \
+    postgresql-client \
+    git \
+    vim \
+    tmux \
+    htop \
+    cmake \
+    ninja-build \
+    pkg-config \
+    libcudnn8-dev \
+    libnvinfer-dev \
+    libnvinfer-plugin-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Redis Exporter
+RUN wget https://github.com/oliver006/redis_exporter/releases/download/v1.54.0/redis_exporter-v1.54.0.linux-arm64.tar.gz && \
+    tar xzf redis_exporter-v1.54.0.linux-arm64.tar.gz && \
+    mv redis_exporter-v1.54.0.linux-arm64/redis_exporter /usr/local/bin/ && \
+    rm -rf redis_exporter-v1.54.0.linux-arm64*
+
+# Set environment variables for CUDA 12.4 and GH200 optimization
+ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/extras/CUPTI/lib64:${LD_LIBRARY_PATH}
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:${PATH}
+
+# Enhanced TF32 acceleration and GPU optimization for GH200 Grace Hopper Superchips
+ENV NVIDIA_TF32_OVERRIDE="1"
+ENV CUDA_DEVICE_MAX_CONNECTIONS="32"
+ENV TF_FORCE_UNIFIED_MEMORY="1"
+ENV TF_ENABLE_NUMA_AWARE_ALLOCATORS="1"
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+ENV TF_FORCE_GPU_ALLOW_GROWTH=true
+ENV TF_XLA_FLAGS="--tf_xla_auto_jit=2 --tf_xla_cpu_global_jit --tf_xla_enable_lazy_compilation=false"
+ENV TF_CUDA_HOST_MEM_LIMIT_IN_MB=32000
+ENV TF_GPU_THREAD_MODE=gpu_private
+ENV TF_GPU_THREAD_COUNT=8
+ENV TF_GPU_ALLOCATOR=cuda_malloc_async
+ENV TF_USE_CUDA_GRAPHS=1
+ENV XLA_FLAGS="--xla_gpu_cuda_data_dir=/usr/local/cuda --xla_gpu_enable_fast_min_max=true"
+ENV TF_CUDNN_USE_AUTOTUNE=1
+ENV TF_LAYOUT_OPTIMIZER_DISABLE=1
+ENV TF_ENABLE_ONEDNN_OPTS=0
+ENV CUDA_AUTO_BOOST="1"
+ENV NCCL_IB_DISABLE="0"
+ENV NCCL_P2P_LEVEL="NVL"
+ENV NCCL_DEBUG=INFO
+ENV GOMP_CPU_AFFINITY="0-31"
+ENV MALLOC_TRIM_THRESHOLD_="0"
+ENV MALLOC_MMAP_THRESHOLD_="131072"
+
+# TensorRT optimization settings
+ENV TF_TRT_ALLOW_ENGINE_NATIVE_SEGMENT=true
+ENV TF_TRT_ALLOW_CUSTOM_OPS=true
+ENV TF_TRT_USE_IMPLICIT_BATCH=false
+ENV TF_TRT_ALLOW_DYNAMIC_SHAPES=true
+ENV TF_TRT_ALLOW_REDUCED_PRECISION=true
+ENV TF_TRT_ALLOW_REDUCED_PRECISION_REDUCTION=true
+ENV TF_TRT_ALLOW_REDUCED_PRECISION_CONVERSION=true
+ENV TF_TRT_ALLOW_REDUCED_PRECISION_WEIGHTS=true
+ENV TF_TRT_ALLOW_REDUCED_PRECISION_VARIABLES=true
+ENV TF_TRT_ALLOW_REDUCED_PRECISION_CONSTANTS=true
+ENV TF_TRT_ALLOW_REDUCED_PRECISION_ACTIVATION=true
+ENV TF_TRT_ALLOW_REDUCED_PRECISION_ACCUMULATION=true
+ENV TF_TRT_ALLOW_REDUCED_PRECISION_REDUCTION_AGGREGATION=true
+ENV TF_TRT_ALLOW_REDUCED_PRECISION_REDUCTION_INITIALIZATION=true
+ENV TF_TRT_ALLOW_REDUCED_PRECISION_REDUCTION_ACCUMULATION=true
+
+# CuPy optimization settings
+ENV CUPY_CACHE_DIR=/app/data/cache/cupy
+ENV CUPY_CACHE_SAVE_CUDA_SOURCE=1
+ENV CUPY_ACCELERATORS=cub,cutensor
+ENV CUPY_TF32=1
+ENV CUPY_CUDA_COMPILE_WITH_DEBUG=0
+
+# Install additional Python packages with ARM64 compatibility
+RUN pip install --upgrade pip && \
+    # Install core dependencies first
+    pip install --no-cache-dir \
+    pandas \
+    numpy \
+    requests \
+    redis \
+    urllib3 \
+    aiohttp \
+    websockets \
+    prometheus_client && \
+    # Install ML packages with specific versions
+    pip install --no-cache-dir \
+    scikit-learn==1.3.2 \
+    pyarrow==14.0.1 \
+    numba>=0.57.0 && \
+    # Install visualization and notebook packages
+    pip install --no-cache-dir \
+    matplotlib \
+    jupyterlab \
+    ipywidgets && \
+    # Install GPU-related packages with specific CUDA version
+    # Use a more robust approach to detect CUDA version
+    CUDA_VERSION=$(nvcc --version | grep -o "release [0-9]\+\.[0-9]\+" | awk '{print $2}' | cut -d. -f1-2) && \
+    echo "Detected CUDA version: ${CUDA_VERSION}" && \
+    # For CUDA 12.x series, use the simplified package name format with optimized build
+    pip install --no-cache-dir \
+    cupy-cuda12x \
+    pycuda && \
+    # Create CuPy cache directory
+    mkdir -p /app/data/cache/cupy && \
+    chmod 777 /app/data/cache/cupy && \
+    # Install TensorRT with proper dependencies
+    pip install --no-cache-dir \
+    nvidia-tensorrt \
+    onnx \
+    onnxruntime-gpu \
+    polygraphy \
+    graphsurgeon && \
+    # Verify TensorRT installation
+    python3 -c "import tensorrt; print(f'TensorRT version: {tensorrt.__version__}')" && \
+    # Install TensorFlow optimization packages
+    pip install --no-cache-dir \
+    tensorflow-addons \
+    tensorflow-probability \
+    tensorflow-datasets \
+    tensorflow-hub \
+    tensorflow-model-optimization \
+    tensorflow-io \
+    tensorflow-text \
+    tensorflow-graphics \
+    tensorflow-decision-forests && \
+    # Install XGBoost with GPU support
+    pip install --no-cache-dir \
+    xgboost==2.0.2 && \
+    # Verify XGBoost GPU support
+    python3 -c "import xgboost; print(f'XGBoost version: {xgboost.__version__}'); print('GPU support available' if xgboost.config_context()['gpu_id'] is not None else 'No GPU support')" && \
+    # Install trading-specific packages
+    pip install --no-cache-dir \
+    polygon-api-client \
+    nvidia-ml-py3 \
+    alpaca-trade-api \
+    packaging \
+    pytz \
+    schedule \
+    slack-sdk \
+    pymongo \
+    sqlalchemy \
+    psycopg2-binary \
+    statsmodels \
+    scipy \
+    lightgbm \
+    optuna \
+    pytest \
+    asyncpg \
+    boto3 \
+    joblib \
+    retrying \
+    # Install additional GPU utilities
+    pynvml \
+    nvitop \
+    gputil \
+    py3nvml
+
+# Create working directories
+WORKDIR /app
+RUN mkdir -p /app/models /app/data /app/logs /app/config
+
+# Copy configuration files
+COPY prometheus/prometheus.yml /etc/prometheus/prometheus.yml
+COPY redis/redis.conf /etc/redis/redis.conf
+
+# Configure supervisord to manage services
+COPY <<EOF /etc/supervisor/conf.d/services.conf
+[supervisord]
+nodaemon=true
+logfile=/var/log/supervisor/supervisord.log
+logfile_maxbytes=50MB
+logfile_backups=5
+loglevel=info
+
+[program:redis]
+command=/usr/bin/redis-server /etc/redis/redis.conf
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/redis/redis-server.err.log
+stdout_logfile=/var/log/redis/redis-server.out.log
+priority=10
+
+[program:prometheus]
+command=/usr/bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/prometheus.err.log
+stdout_logfile=/var/log/prometheus.out.log
+priority=20
+
+[program:redis_exporter]
+command=/usr/local/bin/redis_exporter
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/redis_exporter.err.log
+stdout_logfile=/var/log/redis_exporter.out.log
+priority=30
+
+[program:jupyter]
+command=jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=''
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/jupyter.err.log
+stdout_logfile=/var/log/jupyter.out.log
+priority=40
+
+[program:trading_system]
+command=python3 /app/project/scripts/start_system.py --health-check-interval=300
+directory=/app/project
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/trading_system.err.log
+stdout_logfile=/var/log/trading_system.out.log
+priority=50
+environment=PYTHONPATH="/app/project"
+stopwaitsecs=60
+stopsignal=TERM
+stopasgroup=true
+killasgroup=true
+EOF
+
+# Create directories and set permissions for Redis and other services
+RUN mkdir -p /var/log/supervisor && \
+    mkdir -p /var/log/redis && \
+    mkdir -p /var/log/prometheus && \
+    mkdir -p /var/run/redis && \
+    mkdir -p /data && \
+    touch /var/log/redis/redis-server.err.log && \
+    touch /var/log/redis/redis-server.out.log && \
+    touch /var/log/prometheus.err.log && \
+    touch /var/log/prometheus.out.log && \
+    touch /var/log/redis_exporter.err.log && \
+    touch /var/log/redis_exporter.out.log && \
+    touch /var/log/jupyter.err.log && \
+    touch /var/log/jupyter.out.log && \
+    touch /var/log/trading_system.err.log && \
+    touch /var/log/trading_system.out.log && \
+    touch /var/log/peak_monitor.err.log && \
+    touch /var/log/peak_monitor.out.log && \
+    touch /var/log/model_training.err.log && \
+    touch /var/log/model_training.out.log && \
+    touch /var/log/data_pipeline.err.log && \
+    touch /var/log/data_pipeline.out.log && \
+    touch /var/log/stock_selection.err.log && \
+    touch /var/log/stock_selection.out.log && \
+    chown -R root:root /var/log/redis && \
+    chown -R root:root /var/run/redis && \
+    chown -R root:root /data && \
+    chmod 755 /var/run/redis && \
+    chmod 755 /data
+
+# Create startup script for initializing the system
+COPY <<EOF /app/startup.sh
+#!/bin/bash
+set -e
+
+# Wait for Redis to be ready
+echo "Waiting for Redis to be ready..."
+until redis-cli ping; do
+  sleep 1
+done
+echo "Redis is ready!"
+
+# Set up directories
+mkdir -p /app/data/market_data
+mkdir -p /app/data/processed
+mkdir -p /app/data/signals
+mkdir -p /app/models/signal_detection
+mkdir -p /app/models/price_prediction
+mkdir -p /app/models/risk_assessment
+mkdir -p /app/logs/trading
+mkdir -p /app/logs/ml
+mkdir -p /app/logs/monitoring
+
+# Create shutdown script
+cat > /app/shutdown.sh << 'SHUTDOWN'
+#!/bin/bash
+echo "Shutting down trading system..."
+cd /app/project
+python3 /app/project/scripts/stop_system.py
+echo "Trading system shutdown complete"
+SHUTDOWN
+chmod +x /app/shutdown.sh
+
+# Make scripts executable
+chmod +x /app/project/scripts/start_system.py
+chmod +x /app/project/scripts/stop_system.py
+
+echo "Starting services with supervisord..."
+exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
+EOF
+
+RUN chmod +x /app/startup.sh
+
+# Copy verification scripts
+COPY verify_tensorflow.py /app/verify_tensorflow.py
+COPY test_tensorflow_gpu.py /app/test_tensorflow_gpu.py
+COPY test_tensorflow_gpu_direct.py /app/test_tensorflow_gpu_direct.py
+RUN chmod +x /app/verify_tensorflow.py
+
+# Expose ports
+EXPOSE 8888 6380 9090 9121
+
+# Start all services using the startup script
+CMD ["/app/startup.sh"]
