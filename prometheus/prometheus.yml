@@ -31,6 +31,13 @@ scrape_configs:
     metrics_path: "/metrics"
     scrape_interval: 5s
 
+  # Frontend metrics
+  - job_name: "frontend"
+    static_configs:
+      - targets: ["localhost:5000"]
+    metrics_path: "/metrics"
+    scrape_interval: 5s
+
   # Redis exporter
   - job_name: "redis_exporter"
     static_configs:

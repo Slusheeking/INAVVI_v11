@@ -16,15 +16,17 @@ services:
       - ./models:/app/models
       - ./logs:/app/logs
       - ./prometheus:/etc/prometheus
+      # Redis configuration
       - ./redis/redis.conf:/etc/redis/redis.conf
       - prometheus-data:/prometheus
       - redis-data:/data
     ports:
       - "8888:8888"  # Jupyter Lab
-      - "6380:6380"  # Redis
+      - "6381:6380"  # Redis (using 6381 on host to avoid conflicts)
       - "9090:9090"  # Prometheus
       - "9121:9121"  # Redis Exporter
-      - "8000:8000"  # API server (if needed)
+      - "8000:8000"  # API server
+      - "5000:5000"  # Frontend server
     environment:
       - PYTHONPATH=/app/project
       # API Keys
@@ -33,12 +35,6 @@ services:
       - ALPACA_API_KEY=${ALPACA_API_KEY}
       - ALPACA_API_SECRET=${ALPACA_API_SECRET}
       - ALPACA_API_URL=${ALPACA_API_URL}
-      # Slack Integration
-      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
-      - SLACK_WEBHOOK_NOTIFICATIONS=${SLACK_WEBHOOK_NOTIFICATIONS}
-      - SLACK_WEBHOOK_REPORTS=${SLACK_WEBHOOK_REPORTS}
-      - SLACK_WEBHOOK_PORTFOLIO=${SLACK_WEBHOOK_PORTFOLIO}
-      - SLACK_WEBHOOK_POSITIONS=${SLACK_WEBHOOK_POSITIONS}
       # Redis configuration
       - REDIS_HOST=localhost
       - REDIS_PORT=6380
@@ -48,10 +44,27 @@ services:
       - REDIS_USERNAME=default
       - REDIS_SSL=false
       - REDIS_TIMEOUT=5
+      - REDIS_PUBSUB_THREADS=4
+      - REDIS_NOTIFY_KEYSPACE_EVENTS=Kxe
       - LOG_LEVEL=INFO
-      # GPU acceleration
+      # GPU acceleration and optimization for GH200
       - USE_GPU=true
       - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_TF32_OVERRIDE=1
+      - CUDA_DEVICE_MAX_CONNECTIONS=32
+      - TF_FORCE_UNIFIED_MEMORY=1
+      - TF_ENABLE_NUMA_AWARE_ALLOCATORS=1
+      - TF_FORCE_GPU_ALLOW_GROWTH=true
+      - TF_XLA_FLAGS=--tf_xla_auto_jit=2 --tf_xla_cpu_global_jit --tf_xla_enable_lazy_compilation=false
+      - TF_CUDA_HOST_MEM_LIMIT_IN_MB=32000
+      - TF_GPU_THREAD_MODE=gpu_private
+      - TF_GPU_THREAD_COUNT=8
+      - TF_GPU_ALLOCATOR=cuda_malloc_async
+      - TF_USE_CUDA_GRAPHS=1
+      - XLA_FLAGS=--xla_gpu_cuda_data_dir=/usr/local/cuda --xla_gpu_enable_fast_min_max=true
+      - TF_CUDNN_USE_AUTOTUNE=1
+      - CUPY_TF32=1
+      - CUPY_CACHE_DIR=/app/data/cache/cupy
       # System path configuration
       - DATA_DIR=/app/data
       - MODELS_DIR=/app/models
@@ -67,6 +80,16 @@ services:
       - MAX_WORKERS=10
       - BATCH_SIZE=256
       - QUEUE_SIZE=100
+      # Alert configuration
+      - ALERTS_ENABLED=true
+      - FRONTEND_ALERTS_ENABLED=true
+      - CONSOLE_ALERTS_ENABLED=true
+      # Frontend configuration
+      - FRONTEND_WEBSOCKET_ENABLED=true
+      - FRONTEND_REALTIME_UPDATES=true
+      - FRONTEND_REFRESH_INTERVAL=1000
+      - FRONTEND_MAX_EVENTS=100
+      - FRONTEND_NOTIFICATION_TIMEOUT=10000
     runtime: nvidia
     deploy:
       resources:
@@ -74,7 +97,7 @@ services:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [gpu, utility, compute]
+              capabilities: [gpu, utility, compute, video, graphics]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s

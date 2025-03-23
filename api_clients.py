@@ -12,44 +12,52 @@ GPU acceleration, and error handling while providing specialized functionality
 for their respective APIs.
 """
 
-import os
-import json
-import time
-import logging
-import hashlib
-import pickle
-import signal
-import random
 import asyncio
+import hashlib
+import json
+import logging
+import os
+import pickle
+import random
+import signal
 import threading
-from datetime import datetime, timedelta
+import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
-# Third-party imports
+import aiohttp
 import numpy as np
 import pandas as pd
-import aiohttp
-import redis
-from websockets.exceptions import ConnectionClosed
 import websockets
+from dotenv import load_dotenv
+from websockets.exceptions import ConnectionClosed
+
+import redis
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Third-party imports
 
 # Import GPU acceleration libraries with fallback
 try:
     import cupy as cp
+
     CUPY_AVAILABLE = True
 except ImportError:
     CUPY_AVAILABLE = False
     cp = None
-    print("CuPy not available. Some GPU functionality will be limited.")
 
 # Import TensorFlow with fallback
 try:
     import tensorflow as tf
+
     TF_AVAILABLE = True
 
     # Check for TensorRT support
     try:
         from tensorflow.python.compiler.tensorrt import trt_convert as trt
+
         TENSORRT_AVAILABLE = True
     except ImportError:
         TENSORRT_AVAILABLE = False
@@ -59,132 +67,132 @@ except ImportError:
     TENSORRT_AVAILABLE = False
     tf = None
     trt = None
-    print("TensorFlow not available. Some GPU functionality will be limited.")
 
 # Import Prometheus client for metrics
 try:
-    import prometheus_client as prom
-    from prometheus_client import Counter, Gauge, Histogram, Summary
+    # Import only what we need
+    from prometheus_client import Counter, Gauge, Histogram
+
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
-    print("Prometheus client not available. Metrics collection will be limited.")
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-logger = logging.getLogger('api_clients')
+logger = logging.getLogger("api_clients")
 
 # Environment variables with defaults from config.py
 
 # API Keys
-POLYGON_API_KEY = os.environ.get('POLYGON_API_KEY', '')
-UNUSUAL_WHALES_API_KEY = os.environ.get('UNUSUAL_WHALES_API_KEY', '')
+POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "")
+UNUSUAL_WHALES_API_KEY = os.environ.get("UNUSUAL_WHALES_API_KEY", "")
 
 # Redis Configuration
-REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.environ.get('REDIS_PORT', 6380))
-REDIS_DB = int(os.environ.get('REDIS_DB', 0))
-REDIS_USERNAME = os.environ.get('REDIS_USERNAME', 'default')
-REDIS_PASSWORD = os.environ.get('REDIS_PASSWORD', 'trading_system_2025')
-REDIS_SSL = os.environ.get('REDIS_SSL', 'false').lower() == 'true'
-REDIS_TIMEOUT = int(os.environ.get('REDIS_TIMEOUT', 5))
+REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.environ.get("REDIS_PORT", "6380"))
+REDIS_DB = int(os.environ.get("REDIS_DB", "0"))
+REDIS_USERNAME = os.environ.get("REDIS_USERNAME", "default")
+REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "trading_system_2025")
+REDIS_SSL = os.environ.get("REDIS_SSL", "false").lower() == "true"
+REDIS_TIMEOUT = int(os.environ.get("REDIS_TIMEOUT", "5"))
 
 # Connection Settings
-MAX_RETRIES = int(os.environ.get('MAX_RETRIES', 3))
-RETRY_BACKOFF_FACTOR = float(os.environ.get('RETRY_BACKOFF_FACTOR', 0.5))
-CONNECTION_TIMEOUT = int(os.environ.get('CONNECTION_TIMEOUT', 15))
-MAX_POOL_SIZE = int(os.environ.get('MAX_POOL_SIZE', 30))
-RECONNECT_DELAY = float(os.environ.get('RECONNECT_DELAY', 2.0))
-MAX_RECONNECT_ATTEMPTS = int(os.environ.get('MAX_RECONNECT_ATTEMPTS', 10))
+MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
+RETRY_BACKOFF_FACTOR = float(os.environ.get("RETRY_BACKOFF_FACTOR", "0.5"))
+CONNECTION_TIMEOUT = int(os.environ.get("CONNECTION_TIMEOUT", "15"))
+MAX_POOL_SIZE = int(os.environ.get("MAX_POOL_SIZE", "30"))
+RECONNECT_DELAY = float(os.environ.get("RECONNECT_DELAY", "2.0"))
+MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "10"))
 
 # Cache Settings
-POLYGON_CACHE_TTL = int(os.environ.get('POLYGON_CACHE_TTL', 3600))
-UNUSUAL_WHALES_CACHE_TTL = int(os.environ.get('UNUSUAL_WHALES_CACHE_TTL', 300))
+POLYGON_CACHE_TTL = int(os.environ.get("POLYGON_CACHE_TTL", "3600"))
+UNUSUAL_WHALES_CACHE_TTL = int(
+    os.environ.get("UNUSUAL_WHALES_CACHE_TTL", "300"))
 
 # Processing Settings
-USE_GPU = os.environ.get('USE_GPU', 'true').lower() == 'true'
-BUFFER_SIZE = int(os.environ.get('BUFFER_SIZE', 1000))
+USE_GPU = os.environ.get("USE_GPU", "true").lower() == "true"
+BUFFER_SIZE = int(os.environ.get("BUFFER_SIZE", "1000"))
 
 # Endpoint refresh intervals (in seconds)
 POLYGON_REFRESH_INTERVALS = {
-    'market_status': 60,       # Every minute
-    'ticker_details': 86400,   # Daily
-    'ticker_news': 1800,       # Every 30 minutes
-    'aggregates': {
-        'minute': 60,          # Every minute during market hours
-        'hour': 3600,          # Every hour
-        'day': 86400,          # Daily
+    "market_status": 60,  # Every minute
+    "ticker_details": 86400,  # Daily
+    "ticker_news": 1800,  # Every 30 minutes
+    "aggregates": {
+        "minute": 60,  # Every minute during market hours
+        "hour": 3600,  # Every hour
+        "day": 86400,  # Daily
     },
-    'previous_close': 86400,   # Daily
-    'last_quote': 5,           # Every 5 seconds during market hours
-    'last_trade': 5,           # Every 5 seconds during market hours
+    "previous_close": 86400,  # Daily
+    "last_quote": 5,  # Every 5 seconds during market hours
+    "last_trade": 5,  # Every 5 seconds during market hours
 }
 
 UNUSUAL_WHALES_REFRESH_INTERVALS = {
-    'unusual_activity': 30,    # Every 30 seconds
-    'flow': 10,                # Every 10 seconds
-    'latest_sweep': 5,         # Every 5 seconds
-    'dark_pool': 60,           # Every 60 seconds
-    'alerts': 60,              # Every 60 seconds
-    'alert_configs': 3600,     # Every hour
-    'insider': 3600            # Every hour
+    "unusual_activity": 30,  # Every 30 seconds
+    "flow": 10,  # Every 10 seconds
+    "latest_sweep": 5,  # Every 5 seconds
+    "dark_pool": 60,  # Every 60 seconds
+    "alerts": 60,  # Every 60 seconds
+    "alert_configs": 3600,  # Every hour
+    "insider": 3600,  # Every hour
 }
 
 # Initialize Prometheus metrics if available
 if PROMETHEUS_AVAILABLE:
     # API client metrics
     API_REQUEST_COUNT = Counter(
-        'api_client_request_count',
-        'Number of API requests made',
-        ['client', 'endpoint', 'method']
+        "api_client_request_count",
+        "Number of API requests made",
+        ["client", "endpoint", "method"],
     )
     API_REQUEST_LATENCY = Histogram(
-        'api_client_request_latency_seconds',
-        'API request latency in seconds',
-        ['client', 'endpoint', 'method']
+        "api_client_request_latency_seconds",
+        "API request latency in seconds",
+        ["client", "endpoint", "method"],
     )
     API_ERROR_COUNT = Counter(
-        'api_client_error_count',
-        'Number of API errors',
-        ['client', 'endpoint', 'method', 'error_type']
+        "api_client_error_count",
+        "Number of API errors",
+        ["client", "endpoint", "method", "error_type"],
     )
     API_CACHE_HIT_COUNT = Counter(
-        'api_client_cache_hit_count',
-        'Number of cache hits',
-        ['client', 'cache_type']
+        "api_client_cache_hit_count",
+        "Number of cache hits",
+        ["client", "cache_type"],
     )
     API_CACHE_MISS_COUNT = Counter(
-        'api_client_cache_miss_count',
-        'Number of cache misses',
-        ['client', 'cache_type']
+        "api_client_cache_miss_count",
+        "Number of cache misses",
+        ["client", "cache_type"],
     )
     API_RATE_LIMIT_REMAINING = Gauge(
-        'api_client_rate_limit_remaining',
-        'Remaining API rate limit',
-        ['client', 'endpoint']
+        "api_client_rate_limit_remaining",
+        "Remaining API rate limit",
+        ["client", "endpoint"],
     )
     API_WEBSOCKET_RECONNECTS = Counter(
-        'api_client_websocket_reconnects',
-        'Number of WebSocket reconnections',
-        ['client', 'endpoint']
+        "api_client_websocket_reconnects",
+        "Number of WebSocket reconnections",
+        ["client", "endpoint"],
     )
     API_WEBSOCKET_MESSAGES = Counter(
-        'api_client_websocket_messages',
-        'Number of WebSocket messages received',
-        ['client', 'message_type']
+        "api_client_websocket_messages",
+        "Number of WebSocket messages received",
+        ["client", "message_type"],
     )
     GPU_MEMORY_USAGE = Gauge(
-        'api_client_gpu_memory_usage_bytes',
-        'GPU memory usage in bytes',
-        ['device']
+        "api_client_gpu_memory_usage_bytes",
+        "GPU memory usage in bytes",
+        ["device"],
     )
     GPU_PROCESSING_TIME = Histogram(
-        'api_client_gpu_processing_time_seconds',
-        'GPU processing time in seconds',
-        ['operation']
+        "api_client_gpu_processing_time_seconds",
+        "GPU processing time in seconds",
+        ["operation"],
     )
 
 
@@ -192,12 +200,24 @@ if PROMETHEUS_AVAILABLE:
 # UTILITY CLASSES #
 ###################
 
+
 class RedisCache:
     """Redis-based cache for API responses with fallback to in-memory cache"""
 
-    def __init__(self, prefix="api_cache", host=REDIS_HOST, port=REDIS_PORT,
-                 db=REDIS_DB, ttl=3600, username=REDIS_USERNAME,
-                 password=REDIS_PASSWORD, ssl=REDIS_SSL):
+    # NOTE: This method has many parameters by design to provide flexibility
+    # ruff: noqa: PLR0913
+    def __init__(
+        self,
+        prefix: str = "api_cache",
+        host: str = REDIS_HOST,
+        port: int = REDIS_PORT,
+        db: int = REDIS_DB,
+        ttl: int = 3600,
+        username: str = REDIS_USERNAME,
+        password: str = REDIS_PASSWORD,
+        *,  # Force remaining args to be keyword-only
+        ssl: bool = REDIS_SSL,
+    ) -> None:
         """Initialize Redis cache with prefix for namespace separation"""
         self.prefix = prefix
         self.host = host
@@ -221,17 +241,18 @@ class RedisCache:
                 ssl_cert_reqs=None,
                 socket_timeout=REDIS_TIMEOUT,
                 socket_connect_timeout=5,
-                decode_responses=False  # Keep binary data for efficient serialization
+                decode_responses=False,  # Keep binary data for efficient serialization
             )
             self.redis_client.ping()
             logger.info(
-                f"Connected to Redis at {self.host}:{self.port} [prefix: {self.prefix}]")
+                f"Connected to Redis at {self.host}:{self.port} [prefix: {self.prefix}]"
+            )
         except (redis.RedisError, ConnectionError) as e:
             logger.warning(f"Failed to connect to Redis: {e}")
             logger.warning("Falling back to in-memory cache")
             self.enabled = False
 
-    def _generate_key(self, key_parts):
+    def _generate_key(self, key_parts) -> str:
         """Generate a consistent cache key from parts"""
         if isinstance(key_parts, str):
             key_parts = [key_parts]
@@ -247,16 +268,17 @@ class RedisCache:
         # Try memory cache first for fastest access
         if key in self.memory_cache:
             entry = self.memory_cache[key]
-            if time.time() < entry['expiry']:
+            if time.time() < entry["expiry"]:
                 self.hits += 1
                 # Update Prometheus metrics if available
                 if PROMETHEUS_AVAILABLE:
                     API_CACHE_HIT_COUNT.labels(
-                        client=self.prefix, cache_type='memory').inc()
-                return entry['value']
-            else:
-                # Entry expired
-                del self.memory_cache[key]
+                        client=self.prefix,
+                        cache_type="memory",
+                    ).inc()
+                return entry["value"]
+            # Entry expired
+            del self.memory_cache[key]
 
         # Try Redis if enabled
         if self.enabled:
@@ -267,12 +289,14 @@ class RedisCache:
                     # Update Prometheus metrics if available
                     if PROMETHEUS_AVAILABLE:
                         API_CACHE_HIT_COUNT.labels(
-                            client=self.prefix, cache_type='redis').inc()
+                            client=self.prefix,
+                            cache_type="redis",
+                        ).inc()
                     # Store in memory cache for faster subsequent access
                     value = pickle.loads(data)
                     self.memory_cache[key] = {
-                        'value': value,
-                        'expiry': time.time() + self.ttl
+                        "value": value,
+                        "expiry": time.time() + self.ttl,
                     }
                     return value
             except (redis.RedisError, pickle.PickleError) as e:
@@ -282,7 +306,7 @@ class RedisCache:
         # Update Prometheus metrics if available
         if PROMETHEUS_AVAILABLE:
             API_CACHE_MISS_COUNT.labels(
-                client=self.prefix, cache_type='all').inc()
+                client=self.prefix, cache_type="all").inc()
         return None
 
     def set(self, key_parts, value, ttl=None):
@@ -297,16 +321,15 @@ class RedisCache:
         # Implement LRU-like behavior by limiting memory cache size
         if len(self.memory_cache) >= self.size_limit:
             # Remove random 10% of entries when cache gets too large
-            keys_to_remove = random.sample(list(self.memory_cache.keys()),
-                                           int(len(self.memory_cache) * 0.1))
+            keys_to_remove = random.sample(
+                list(self.memory_cache.keys()),
+                int(len(self.memory_cache) * 0.1),
+            )
             for k in keys_to_remove:
                 self.memory_cache.pop(k, None)
 
         # Store in memory cache
-        self.memory_cache[key] = {
-            'value': value,
-            'expiry': expiry
-        }
+        self.memory_cache[key] = {"value": value, "expiry": expiry}
 
         # Store in Redis if enabled
         if self.enabled:
@@ -324,7 +347,8 @@ class RedisCache:
         if df is None or df.empty:
             return False
 
-        # Use pickle for serialization instead of PyArrow due to compatibility issues
+        # Use pickle for serialization instead of PyArrow due to compatibility
+        # issues
         try:
             key = self._generate_key(key_parts)
             ttl = ttl or self.ttl
@@ -337,10 +361,7 @@ class RedisCache:
                     logger.warning(f"Error storing DataFrame in Redis: {e}")
 
             # Store in memory cache
-            self.memory_cache[key] = {
-                'value': df,
-                'expiry': time.time() + ttl
-            }
+            self.memory_cache[key] = {"value": df, "expiry": time.time() + ttl}
             return True
         except Exception:
             return self.set(key_parts, df, ttl)
@@ -352,15 +373,16 @@ class RedisCache:
         # Try memory cache first
         if key in self.memory_cache:
             entry = self.memory_cache[key]
-            if time.time() < entry['expiry']:
+            if time.time() < entry["expiry"]:
                 self.hits += 1
                 # Update Prometheus metrics if available
                 if PROMETHEUS_AVAILABLE:
                     API_CACHE_HIT_COUNT.labels(
-                        client=self.prefix, cache_type='memory').inc()
-                return entry['value']
-            else:
-                del self.memory_cache[key]
+                        client=self.prefix,
+                        cache_type="memory",
+                    ).inc()
+                return entry["value"]
+            del self.memory_cache[key]
 
         # Try Redis if enabled
         if self.enabled:
@@ -371,7 +393,9 @@ class RedisCache:
                     # Update Prometheus metrics if available
                     if PROMETHEUS_AVAILABLE:
                         API_CACHE_HIT_COUNT.labels(
-                            client=self.prefix, cache_type='redis').inc()
+                            client=self.prefix,
+                            cache_type="redis",
+                        ).inc()
 
                     # Deserialize using pickle
                     try:
@@ -379,8 +403,8 @@ class RedisCache:
 
                         # Store in memory cache
                         self.memory_cache[key] = {
-                            'value': df,
-                            'expiry': time.time() + self.ttl
+                            "value": df,
+                            "expiry": time.time() + self.ttl,
                         }
                         return df
                     except Exception as e:
@@ -392,15 +416,20 @@ class RedisCache:
         # Update Prometheus metrics if available
         if PROMETHEUS_AVAILABLE:
             API_CACHE_MISS_COUNT.labels(
-                client=self.prefix, cache_type='all').inc()
+                client=self.prefix, cache_type="all").inc()
         return None
 
 
 class AsyncConnectionPool:
     """Asynchronous HTTP connection pool with retry logic"""
 
-    def __init__(self, max_retries=MAX_RETRIES, backoff_factor=RETRY_BACKOFF_FACTOR,
-                 max_pool_size=MAX_POOL_SIZE, timeout=CONNECTION_TIMEOUT):
+    def __init__(
+        self,
+        max_retries=MAX_RETRIES,
+        backoff_factor=RETRY_BACKOFF_FACTOR,
+        max_pool_size=MAX_POOL_SIZE,
+        timeout=CONNECTION_TIMEOUT,
+    ) -> None:
         """Initialize connection pool"""
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
@@ -409,9 +438,10 @@ class AsyncConnectionPool:
         self.connector = None
 
         logger.info(
-            f"Async connection pool initialized with max_pool_size={max_pool_size}, max_retries={max_retries}")
+            f"Async connection pool initialized with max_pool_size={max_pool_size}, max_retries={max_retries}",
+        )
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initialize the aiohttp session"""
         if self.session is None or self.session.closed:
             # Configure TCP connector with connection pooling
@@ -419,17 +449,17 @@ class AsyncConnectionPool:
                 limit=MAX_POOL_SIZE,
                 ttl_dns_cache=300,  # Cache DNS results for 5 minutes
                 use_dns_cache=True,
-                ssl=False  # API uses HTTPS but we don't need to verify
+                ssl=False,  # API uses HTTPS but we don't need to verify
             )
 
             # Create session with default headers and timeout
             self.session = aiohttp.ClientSession(
                 connector=self.connector,
                 headers={
-                    'User-Agent': 'GPUTradingClient/1.0',
-                    'Accept': 'application/json'
+                    "User-Agent": "GPUTradingClient/1.0",
+                    "Accept": "application/json",
                 },
-                timeout=aiohttp.ClientTimeout(total=self.timeout)
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
             )
 
     async def get(self, url, params=None, headers=None):
@@ -441,17 +471,24 @@ class AsyncConnectionPool:
 
         for retry in range(self.max_retries + 1):
             try:
-                async with self.session.get(url, params=params, headers=headers) as response:
+                async with self.session.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                ) as response:
                     # Check if response is successful
                     if response.status == 200:
                         return await response.json()
 
                     # Handle rate limiting
                     if response.status == 429:
-                        wait_time = (2 ** retry) * \
-                            self.backoff_factor + random.uniform(0, 1)
+                        wait_time = (2**retry) * self.backoff_factor + random.uniform(
+                            0,
+                            1,
+                        )
                         logger.warning(
-                            f"Rate limit hit, retrying in {wait_time:.2f}s (attempt {retry+1}/{self.max_retries})")
+                            f"Rate limit hit, retrying in {wait_time:.2f}s (attempt {retry+1}/{self.max_retries})"
+                        )
                         await asyncio.sleep(wait_time)
                         continue
 
@@ -464,26 +501,28 @@ class AsyncConnectionPool:
                         return {"status": "ERROR", "error": last_error}
 
                     # Retry on server errors
-                    wait_time = (2 ** retry) * \
-                        self.backoff_factor + random.uniform(0, 1)
+                    wait_time = (2**retry) * self.backoff_factor + \
+                        random.uniform(0, 1)
                     logger.warning(
-                        f"Server error, retrying in {wait_time:.2f}s (attempt {retry+1}/{self.max_retries})")
+                        f"Server error, retrying in {wait_time:.2f}s (attempt {retry+1}/{self.max_retries})"
+                    )
                     await asyncio.sleep(wait_time)
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                last_error = f"Request failed: {type(e).__name__}: {str(e)}"
+                last_error = f"Request failed: {type(e).__name__}: {e!s}"
 
                 # Exponential backoff with jitter
-                wait_time = (2 ** retry) * self.backoff_factor + \
+                wait_time = (2**retry) * self.backoff_factor + \
                     random.uniform(0, 1)
                 logger.warning(
-                    f"Connection error, retrying in {wait_time:.2f}s (attempt {retry+1}/{self.max_retries}): {e}")
+                    f"Connection error, retrying in {wait_time:.2f}s (attempt {retry+1}/{self.max_retries}): {e}"
+                )
                 await asyncio.sleep(wait_time)
 
         # All retries failed
         return {"status": "ERROR", "error": last_error or "Max retries exceeded"}
 
-    async def close(self):
+    async def close(self) -> None:
         """Close the session and all connections"""
         if self.session and not self.session.closed:
             await self.session.close()
@@ -493,7 +532,7 @@ class AsyncConnectionPool:
 class GPUAccelerator:
     """GPU acceleration utilities for data processing with TensorFlow, TensorRT, and CuPy"""
 
-    def __init__(self, use_gpu=USE_GPU):
+    def __init__(self, use_gpu=USE_GPU) -> None:
         """Initialize GPU acceleration"""
         self.use_gpu = use_gpu
         self.gpu_initialized = False
@@ -501,19 +540,20 @@ class GPUAccelerator:
         self.device_name = None
         self.device_id = 0
         self.memory_limit = int(os.environ.get(
-            'TF_CUDA_HOST_MEM_LIMIT_IN_MB', '16000'))
-        self.use_mixed_precision = os.environ.get(
-            'TF_MIXED_PRECISION', 'true').lower() == 'true'
+            "TF_CUDA_HOST_MEM_LIMIT_IN_MB", "16000"))
+        self.use_mixed_precision = (
+            os.environ.get("TF_MIXED_PRECISION", "true").lower() == "true"
+        )
         self.use_xla = os.environ.get(
-            'TF_XLA_FLAGS', '').find('auto_jit=2') != -1
+            "TF_XLA_FLAGS", "").find("auto_jit=2") != -1
         self.tensorrt_precision = os.environ.get(
-            'TENSORRT_PRECISION_MODE', 'FP16')
+            "TENSORRT_PRECISION_MODE", "FP16")
 
         # Initialize GPU if available and requested
         if self.use_gpu:
             self._initialize_gpu()
 
-    def _initialize_gpu(self):
+    def _initialize_gpu(self) -> None:
         """Initialize GPU for data processing with TensorFlow, TensorRT, and CuPy"""
         # Initialize CuPy if available
         if CUPY_AVAILABLE:
@@ -541,18 +581,20 @@ class GPUAccelerator:
                         self.device_name = device_props["name"].decode()
                         self.device_id = device_id
                         logger.info(
-                            f"Using GPU at index {device_id}: {self.device_name}")
+                            f"Using GPU at index {device_id}: {self.device_name}",
+                        )
 
                     # Use unified memory for better performance
-                    cp.cuda.set_allocator(cp.cuda.MemoryPool(
-                        cp.cuda.malloc_managed).malloc)
+                    cp.cuda.set_allocator(
+                        cp.cuda.MemoryPool(cp.cuda.malloc_managed).malloc,
+                    )
                     logger.info("CuPy configured with unified memory")
                     self.gpu_initialized = True
                 else:
                     logger.warning("No GPU devices found for CuPy")
                     self.gpu_initialized = False
             except Exception as e:
-                logger.error(f"Error initializing CuPy: {e}")
+                logger.exception(f"Error initializing CuPy: {e}")
                 self.gpu_initialized = False
         else:
             logger.warning(
@@ -563,7 +605,7 @@ class GPUAccelerator:
         if TF_AVAILABLE and self.use_gpu:
             try:
                 # Configure TensorFlow for GPU
-                gpus = tf.config.list_physical_devices('GPU')
+                gpus = tf.config.list_physical_devices("GPU")
                 if gpus:
                     logger.info(f"TensorFlow detected {len(gpus)} GPU(s)")
 
@@ -581,24 +623,29 @@ class GPUAccelerator:
                         try:
                             tf.config.set_logical_device_configuration(
                                 gpus[0],
-                                [tf.config.LogicalDeviceConfiguration(
-                                    memory_limit=self.memory_limit * 1024 * 1024
-                                )]
+                                [
+                                    tf.config.LogicalDeviceConfiguration(
+                                        memory_limit=self.memory_limit * 1024 * 1024,
+                                    ),
+                                ],
                             )
                             logger.info(
-                                f"Set TensorFlow memory limit to {self.memory_limit}MB")
+                                f"Set TensorFlow memory limit to {self.memory_limit}MB",
+                            )
                         except Exception as e:
                             logger.warning(
-                                f"Error setting TensorFlow memory limit: {e}")
+                                f"Error setting TensorFlow memory limit: {e}",
+                            )
 
                     # Enable mixed precision if configured
                     if self.use_mixed_precision:
                         try:
                             policy = tf.keras.mixed_precision.Policy(
-                                'mixed_float16')
+                                "mixed_float16")
                             tf.keras.mixed_precision.set_global_policy(policy)
                             logger.info(
-                                "Enabled mixed precision (float16) for TensorFlow")
+                                "Enabled mixed precision (float16) for TensorFlow",
+                            )
                         except Exception as e:
                             logger.warning(
                                 f"Could not set mixed precision policy: {e}")
@@ -610,7 +657,7 @@ class GPUAccelerator:
                             "Enabled XLA JIT compilation for TensorFlow")
 
                     # Test TensorFlow GPU
-                    with tf.device('/GPU:0'):
+                    with tf.device("/GPU:0"):
                         a = tf.constant([[1.0, 2.0], [3.0, 4.0]])
                         b = tf.constant([[1.0, 1.0], [0.0, 1.0]])
                         c = tf.matmul(a, b)
@@ -622,17 +669,19 @@ class GPUAccelerator:
                     # Check TensorRT availability
                     if TENSORRT_AVAILABLE:
                         logger.info(
-                            f"TensorRT is available for model optimization (precision: {self.tensorrt_precision})")
+                            f"TensorRT is available for model optimization (precision: {self.tensorrt_precision})"
+                        )
                 else:
                     logger.warning("No GPU detected by TensorFlow")
                     self.tf_initialized = False
             except Exception as e:
-                logger.error(f"Error initializing TensorFlow: {e}")
+                logger.exception(f"Error initializing TensorFlow: {e}")
                 self.tf_initialized = False
         else:
             if not TF_AVAILABLE:
                 logger.warning(
-                    "TensorFlow not available, TensorFlow GPU acceleration disabled")
+                    "TensorFlow not available, TensorFlow GPU acceleration disabled",
+                )
             self.tf_initialized = False
 
         # Update use_gpu flag based on initialization results
@@ -648,7 +697,8 @@ class GPUAccelerator:
                     logger.info("- TensorRT for model optimization")
         else:
             logger.warning(
-                "GPU acceleration disabled - neither CuPy nor TensorFlow initialized successfully")
+                "GPU acceleration disabled - neither CuPy nor TensorFlow initialized successfully"
+            )
 
     def process_numpy_array(self, array, func):
         """
@@ -674,7 +724,7 @@ class GPUAccelerator:
             # Convert back to numpy
             return cp.asnumpy(cp_result)
         except Exception as e:
-            logger.error(f"Error in GPU processing: {e}")
+            logger.exception(f"Error in GPU processing: {e}")
             return func(array)
 
     def process_with_tensorflow(self, data, func):
@@ -697,24 +747,27 @@ class GPUAccelerator:
                 tf_data = tf.convert_to_tensor(data, dtype=tf.float32)
             elif isinstance(data, pd.DataFrame):
                 # For DataFrames, convert numeric columns to tensors
-                numeric_cols = data.select_dtypes(include=['number']).columns
-                tf_data = {col: tf.convert_to_tensor(data[col].values, dtype=tf.float32)
-                           for col in numeric_cols}
+                numeric_cols = data.select_dtypes(include=["number"]).columns
+                tf_data = {
+                    col: tf.convert_to_tensor(
+                        data[col].values, dtype=tf.float32)
+                    for col in numeric_cols
+                }
             else:
                 # Try direct conversion
                 tf_data = tf.convert_to_tensor(data, dtype=tf.float32)
 
             # Process with TensorFlow on GPU
-            with tf.device(f'/GPU:{self.device_id}'):
+            with tf.device(f"/GPU:{self.device_id}"):
                 result = func(tf_data)
 
             # Convert result back to numpy if it's a tensor
-            if isinstance(result, tf.Tensor) or isinstance(result, tf.Variable):
+            if isinstance(result, tf.Tensor | tf.Variable):
                 return result.numpy()
             return result
 
         except Exception as e:
-            logger.error(f"Error in TensorFlow processing: {e}")
+            logger.exception(f"Error in TensorFlow processing: {e}")
             return func(data)
 
     def optimize_with_tensorrt(self, model_path, output_path=None, precision_mode=None):
@@ -736,26 +789,27 @@ class GPUAccelerator:
         try:
             # Set default output path if not provided
             if output_path is None:
-                output_path = model_path + '_trt'
+                output_path = model_path + "_trt"
 
             # Set default precision mode if not provided
             if precision_mode is None:
                 precision_mode = self.tensorrt_precision
 
             logger.info(
-                f"Optimizing model with TensorRT: {model_path} -> {output_path} (precision: {precision_mode})")
+                f"Optimizing model with TensorRT: {model_path} -> {output_path} (precision: {precision_mode})",
+            )
 
             # Configure TensorRT conversion
             conversion_params = trt.DEFAULT_TRT_CONVERSION_PARAMS._replace(
                 max_workspace_size_bytes=8000000000,  # 8GB
                 precision_mode=precision_mode,
-                maximum_cached_engines=100
+                maximum_cached_engines=100,
             )
 
             # Create TensorRT converter
             converter = trt.TrtGraphConverterV2(
                 input_saved_model_dir=model_path,
-                conversion_params=conversion_params
+                conversion_params=conversion_params,
             )
 
             # Convert model
@@ -769,10 +823,10 @@ class GPUAccelerator:
             return output_path
 
         except Exception as e:
-            logger.error(f"Error optimizing model with TensorRT: {e}")
+            logger.exception(f"Error optimizing model with TensorRT: {e}")
             return None
 
-    def clear_memory(self):
+    def clear_memory(self) -> None:
         """Clear GPU memory to prevent fragmentation"""
         # Clear CuPy memory if initialized
         if self.gpu_initialized and CUPY_AVAILABLE:
@@ -780,7 +834,7 @@ class GPUAccelerator:
                 cp.get_default_memory_pool().free_all_blocks()
                 logger.info("CuPy GPU memory cleared")
             except Exception as e:
-                logger.error(f"Error clearing CuPy GPU memory: {e}")
+                logger.exception(f"Error clearing CuPy GPU memory: {e}")
 
         # Clear TensorFlow memory if initialized
         if self.tf_initialized and TF_AVAILABLE:
@@ -789,18 +843,26 @@ class GPUAccelerator:
                 tf.keras.backend.clear_session()
                 logger.info("TensorFlow GPU memory cleared")
             except Exception as e:
-                logger.error(f"Error clearing TensorFlow GPU memory: {e}")
+                logger.exception(f"Error clearing TensorFlow GPU memory: {e}")
 
 
 ##########################
 # POLYGON REST API CLIENT #
 ##########################
 
+
 class PolygonRESTClient:
     """GPU-Optimized client for the Polygon.io REST API"""
 
-    def __init__(self, api_key=POLYGON_API_KEY, redis_client=None, use_gpu=USE_GPU,
-                 max_pool_size=MAX_POOL_SIZE, max_retries=MAX_RETRIES, cache_ttl=POLYGON_CACHE_TTL):
+    def __init__(
+        self,
+        api_key=POLYGON_API_KEY,
+        redis_client=None,
+        use_gpu=USE_GPU,
+        max_pool_size=MAX_POOL_SIZE,
+        max_retries=MAX_RETRIES,
+        cache_ttl=POLYGON_CACHE_TTL,
+    ) -> None:
         """
         Initialize GPU-Optimized Polygon API client
 
@@ -820,10 +882,12 @@ class PolygonRESTClient:
         # Verify API key is provided
         if not self.api_key:
             logger.warning(
-                "No API key provided. Set the POLYGON_API_KEY environment variable.")
+                "No API key provided. Set the POLYGON_API_KEY environment variable.",
+            )
         else:
             logger.info(
-                f"Initialized Polygon API client with API key: {self.api_key[:4]}****{self.api_key[-4:] if len(self.api_key) > 8 else ''}")
+                f"Initialized Polygon API client with API key: {self.api_key[:4]}****{self.api_key[-4:] if len(self.api_key) > 8 else ''}",
+            )
 
         # Initialize base URL
         self.base_url = "https://api.polygon.io"
@@ -833,7 +897,9 @@ class PolygonRESTClient:
 
         # Initialize connection pool
         self.connection_pool = AsyncConnectionPool(
-            max_pool_size=max_pool_size, max_retries=max_retries)
+            max_pool_size=max_pool_size,
+            max_retries=max_retries,
+        )
 
         # Initialize thread pool for parallel processing
         self.thread_pool = ThreadPoolExecutor(max_workers=os.cpu_count())
@@ -852,11 +918,51 @@ class PolygonRESTClient:
         self.scheduled_tasks = {}
         self.event_loop = None
 
-    def _handle_signal(self, signum, frame):
+    def _handle_signal(self, signum, frame) -> None:
         """Handle signals for graceful shutdown"""
         logger.info(f"Received signal {signum}, shutting down gracefully")
         self.running = False
         asyncio.create_task(self.close())
+
+    def _send_frontend_notification(self, message, level="info", category="api", details=None):
+        """
+        Send notification to frontend via Redis
+
+        Args:
+            message: Notification message
+            level: Notification level (info, success, warning, error)
+            category: Notification category
+            details: Additional details as dictionary
+        """
+        if not self.redis_client:
+            return
+
+        try:
+            notification = {
+                "timestamp": time.time(),
+                "message": message,
+                "level": level,
+                "category": category,
+                "source": "polygon_rest_api",
+                "details": details or {}
+            }
+
+            # Add to notifications list
+            self.redis_client.lpush(
+                "frontend:notifications", json.dumps(notification))
+
+            # Trim list to prevent unbounded growth
+            self.redis_client.ltrim("frontend:notifications", 0, 999)
+
+            # Publish event for real-time updates
+            self.redis_client.publish("frontend:events", json.dumps({
+                "type": "notification",
+                "data": notification
+            }))
+
+            logger.debug(f"Sent frontend notification: {message}")
+        except Exception as e:
+            logger.error(f"Error sending frontend notification: {e}")
 
     async def _make_request(self, endpoint, params=None):
         """
@@ -896,17 +1002,17 @@ class PolygonRESTClient:
             # Update Prometheus metrics if available
             if PROMETHEUS_AVAILABLE:
                 API_ERROR_COUNT.labels(
-                    client='polygon',
+                    client="polygon",
                     endpoint=endpoint,
-                    method='GET',
-                    error_type='invalid_api_key'
+                    method="GET",
+                    error_type="invalid_api_key",
                 ).inc()
             return {"status": "ERROR", "error": "Invalid API key format"}
 
         # Add API key to params for Polygon API
         if params is None:
             params = {}
-        params['apiKey'] = self.api_key
+        params["apiKey"] = self.api_key
 
         # Record request start time for latency measurement
         start_time = time.time()
@@ -916,9 +1022,9 @@ class PolygonRESTClient:
             # Update Prometheus metrics if available
             if PROMETHEUS_AVAILABLE:
                 API_REQUEST_COUNT.labels(
-                    client='polygon',
+                    client="polygon",
                     endpoint=endpoint,
-                    method='GET'
+                    method="GET",
                 ).inc()
 
             data = await self.connection_pool.get(url, params=params)
@@ -929,9 +1035,9 @@ class PolygonRESTClient:
             # Update latency metrics
             if PROMETHEUS_AVAILABLE:
                 API_REQUEST_LATENCY.labels(
-                    client='polygon',
+                    client="polygon",
                     endpoint=endpoint,
-                    method='GET'
+                    method="GET",
                 ).observe(latency)
 
             # Cache successful responses
@@ -945,13 +1051,14 @@ class PolygonRESTClient:
                     # Update error metrics
                     if PROMETHEUS_AVAILABLE:
                         API_ERROR_COUNT.labels(
-                            client='polygon',
+                            client="polygon",
                             endpoint=endpoint,
-                            method='GET',
-                            error_type='api_error'
+                            method="GET",
+                            error_type="api_error",
                         ).inc()
                     logger.error(
-                        f"API error for {endpoint}: {data.get('error', 'Unknown error')}")
+                        f"API error for {endpoint}: {data.get('error', 'Unknown error')}"
+                    )
 
             return data
         except Exception as e:
@@ -961,20 +1068,24 @@ class PolygonRESTClient:
             # Update error metrics
             if PROMETHEUS_AVAILABLE:
                 API_ERROR_COUNT.labels(
-                    client='polygon',
+                    client="polygon",
                     endpoint=endpoint,
-                    method='GET',
-                    error_type=type(e).__name__
+                    method="GET",
+                    error_type=type(e).__name__,
                 ).inc()
                 API_REQUEST_LATENCY.labels(
-                    client='polygon',
+                    client="polygon",
                     endpoint=endpoint,
-                    method='GET'
+                    method="GET",
                 ).observe(latency)
 
-            logger.error(
-                f"Unexpected error during API request: {type(e).__name__}: {e}")
-            return {"status": "ERROR", "error": f"Unexpected error: {type(e).__name__}: {e}"}
+            logger.exception(
+                f"Unexpected error during API request: {type(e).__name__}: {e}",
+            )
+            return {
+                "status": "ERROR",
+                "error": f"Unexpected error: {type(e).__name__}: {e}",
+            }
 
     async def get_market_status(self):
         """
@@ -995,29 +1106,49 @@ class PolygonRESTClient:
                 if self.redis_client:
                     self.redis_client.set("market:status", json.dumps(data))
                     self.redis_client.set(
-                        "market:status:last_update", datetime.now().isoformat())
+                        "market:status:last_update",
+                        datetime.now().isoformat(),
+                    )
+
+                    # Send notification to frontend
+                    self._send_frontend_notification(
+                        message=f"Market status updated: {data.get('market', 'unknown')}",
+                        level="info",
+                        category="market_data",
+                        details={
+                            "status": data.get("market", "unknown"),
+                            "early_hours": data.get("early_hours", False),
+                            "after_hours": data.get("after_hours", False),
+                            "currencies": data.get("currencies", {}),
+                            "server_time": data.get("serverTime")
+                        }
+                    )
 
                 return data
-            else:
-                error_msg = data.get('error', 'Unknown error') if isinstance(
-                    data, dict) else 'Unknown error'
-                logger.warning(f"Failed to get market status: {error_msg}")
+            error_msg = (
+                data.get("error", "Unknown error")
+                if isinstance(data, dict)
+                else "Unknown error"
+            )
+            logger.warning(f"Failed to get market status: {error_msg}")
 
-                # Create a fallback market status
-                fallback_status = {
-                    "status": "OK",
-                    "market": "open",
-                    "serverTime": datetime.now().isoformat()
-                }
-                # Store fallback in Redis if available
-                if self.redis_client:
-                    self.redis_client.set(
-                        "market:status", json.dumps(fallback_status))
-                    self.redis_client.set(
-                        "market:status:last_update", datetime.now().isoformat())
-                return None
+            # Create a fallback market status
+            fallback_status = {
+                "status": "OK",
+                "market": "open",
+                "serverTime": datetime.now().isoformat(),
+            }
+            # Store fallback in Redis if available
+            if self.redis_client:
+                self.redis_client.set(
+                    "market:status", json.dumps(fallback_status))
+                self.redis_client.set(
+                    "market:status:last_update",
+                    datetime.now().isoformat(),
+                )
+            return None
         except Exception as e:
-            logger.error(f"Error getting market status: {e}")
+            logger.exception(f"Error getting market status: {e}")
             return None
 
     async def get_ticker_details(self, ticker):
@@ -1042,21 +1173,48 @@ class PolygonRESTClient:
                     result = data.get("results")
                     if result:
                         self.redis_client.hset(
-                            f"stock:{ticker}:metadata", mapping=result)
+                            f"stock:{ticker}:metadata",
+                            mapping=result,
+                        )
                         self.redis_client.set(
-                            f"stock:{ticker}:metadata:last_update", datetime.now().isoformat())
+                            f"stock:{ticker}:metadata:last_update",
+                            datetime.now().isoformat(),
+                        )
+
+                        # Send notification to frontend
+                        self._send_frontend_notification(
+                            message=f"Updated ticker details for {ticker}",
+                            level="info",
+                            category="market_data",
+                            details={
+                                "ticker": ticker,
+                                "name": result.get("name", ""),
+                                "market_cap": result.get("market_cap", 0),
+                                "primary_exchange": result.get("primary_exchange", ""),
+                                "type": result.get("type", ""),
+                                "active": result.get("active", True)
+                            }
+                        )
 
                 return data.get("results")
-            else:
-                logger.warning(
-                    f"Failed to get ticker details for {ticker}: {data.get('error', 'Unknown error')}")
-                return None
+            logger.warning(
+                f"Failed to get ticker details for {ticker}: {data.get('error', 'Unknown error')}"
+            )
+            return None
         except Exception as e:
-            logger.error(f"Error getting ticker details for {ticker}: {e}")
+            logger.exception(f"Error getting ticker details for {ticker}: {e}")
             return None
 
-    async def get_aggregates(self, ticker, multiplier=1, timespan="minute",
-                             from_date=None, to_date=None, limit=5000, adjusted=True):
+    async def get_aggregates(
+        self,
+        ticker,
+        multiplier=1,
+        timespan="minute",
+        from_date=None,
+        to_date=None,
+        limit=5000,
+        adjusted=True,
+    ):
         """
         Get aggregated data for a ticker
 
@@ -1088,7 +1246,8 @@ class PolygonRESTClient:
 
         # Check cache for DataFrame
         cache_key = [
-            f"aggregates:{ticker}:{multiplier}:{timespan}:{from_date}:{to_date}:{adjusted}"]
+            f"aggregates:{ticker}:{multiplier}:{timespan}:{from_date}:{to_date}:{adjusted}"
+        ]
         cached_df = self.cache.get_dataframe(cache_key)
         if cached_df is not None and not cached_df.empty:
             logger.debug(f"Cache hit for aggregates: {ticker}")
@@ -1115,7 +1274,7 @@ class PolygonRESTClient:
                 "h": "high",
                 "l": "low",
                 "t": "timestamp",
-                "n": "transactions"
+                "n": "transactions",
             }
             df = df.rename(columns=column_map)
 
@@ -1148,7 +1307,7 @@ class PolygonRESTClient:
                         "low": float(row["low"]),
                         "close": float(row["close"]),
                         "volume": int(row["volume"]),
-                        "timestamp": timestamp
+                        "timestamp": timestamp,
                     }
                     candles_dict[timestamp] = json.dumps(candle_data)
 
@@ -1162,25 +1321,54 @@ class PolygonRESTClient:
                                  datetime.now().isoformat())
                     pipeline.execute()
 
+                    # Send notification to frontend
+                    self._send_frontend_notification(
+                        message=f"Retrieved {len(df)} price candles for {ticker}",
+                        level="success",
+                        category="market_data",
+                        details={
+                            "ticker": ticker,
+                            "timespan": timespan,
+                            "multiplier": multiplier,
+                            "from_date": from_date,
+                            "to_date": to_date,
+                            "candle_count": len(df),
+                            "latest_price": float(df["close"].iloc[-1]) if not df.empty else None,
+                            "price_change": float(df["close"].iloc[-1] - df["close"].iloc[0]) if len(df) > 1 else 0,
+                            "volume": int(df["volume"].sum()) if not df.empty else 0
+                        }
+                    )
+
             # Cache the DataFrame
             self.cache.store_dataframe(cache_key, df)
 
             return df
-        elif data.get("status") == "OK" and ("results" not in data or not data["results"]):
+        if data.get("status") == "OK" and (
+            "results" not in data or not data["results"]
+        ):
             # No results found, but API call was successful
             logger.warning(
                 f"No data found for {ticker} in the specified date range")
             return pd.DataFrame()
-        else:
-            # API call failed
-            error_msg = data.get("error", "Unknown error") if isinstance(
-                data, dict) else "Unknown error"
-            logger.warning(
-                f"Failed to get aggregates for {ticker}: {error_msg}")
-            return pd.DataFrame()
+        # API call failed
+        error_msg = (
+            data.get("error", "Unknown error")
+            if isinstance(data, dict)
+            else "Unknown error"
+        )
+        logger.warning(f"Failed to get aggregates for {ticker}: {error_msg}")
+        return pd.DataFrame()
 
-    async def get_aggregates_batch(self, tickers, multiplier=1, timespan="minute",
-                                   from_date=None, to_date=None, limit=5000, adjusted=True):
+    async def get_aggregates_batch(
+        self,
+        tickers,
+        multiplier=1,
+        timespan="minute",
+        from_date=None,
+        to_date=None,
+        limit=5000,
+        adjusted=True,
+    ):
         """
         Get aggregated data for multiple tickers in parallel
 
@@ -1206,28 +1394,47 @@ class PolygonRESTClient:
         # Create tasks for each ticker
         tasks = []
         for ticker in tickers:
-            tasks.append(self.get_aggregates(
-                ticker=ticker,
-                multiplier=multiplier,
-                timespan=timespan,
-                from_date=from_date,
-                to_date=to_date,
-                limit=limit,
-                adjusted=adjusted
-            ))
+            tasks.append(
+                self.get_aggregates(
+                    ticker=ticker,
+                    multiplier=multiplier,
+                    timespan=timespan,
+                    from_date=from_date,
+                    to_date=to_date,
+                    limit=limit,
+                    adjusted=adjusted,
+                ),
+            )
 
         # Execute tasks in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Process results
         data = {}
-        for ticker, result in zip(tickers, results):
+        for ticker, result in zip(tickers, results, strict=False):
             if isinstance(result, Exception):
                 logger.error(f"Error fetching data for {ticker}: {result}")
                 continue
 
             if not result.empty:
                 data[ticker] = result
+
+        # Send notification to frontend about batch completion
+        if self.redis_client:
+            self._send_frontend_notification(
+                message=f"Completed batch data retrieval for {len(tickers)} tickers",
+                level="success",
+                category="market_data",
+                details={
+                    "tickers_requested": tickers,
+                    "tickers_retrieved": list(data.keys()),
+                    "timespan": timespan,
+                    "multiplier": multiplier,
+                    "from_date": from_date,
+                    "to_date": to_date,
+                    "success_rate": f"{len(data)}/{len(tickers)} ({int(len(data)/max(1, len(tickers))*100)}%)"
+                }
+            )
 
         return data
 
@@ -1246,7 +1453,22 @@ class PolygonRESTClient:
 
         if not self.gpu_accelerator.use_gpu or not self.gpu_accelerator.gpu_initialized:
             logger.warning(
-                "GPU processing requested but GPU is not available or initialized")
+                "GPU processing requested but GPU is not available or initialized",
+            )
+
+            # Send notification to frontend
+            if self.redis_client:
+                self._send_frontend_notification(
+                    message="Falling back to CPU processing - GPU not available",
+                    level="warning",
+                    category="gpu_processing",
+                    details={
+                        "reason": "GPU not available or initialized",
+                        "tickers": list(data.keys()),
+                        "fallback": "CPU processing"
+                    }
+                )
+
             return self._process_data_with_cpu(data)
 
         results = {}
@@ -1256,25 +1478,29 @@ class PolygonRESTClient:
                 continue
 
             try:
+                # Record start time for performance tracking
+                start_time = time.time()
+
                 # Convert to CuPy arrays for GPU processing
                 if CUPY_AVAILABLE:
                     close_prices = cp.array(
-                        df['close'].values, dtype=cp.float32)
-                    volumes = cp.array(df['volume'].values, dtype=cp.float32)
+                        df["close"].values, dtype=cp.float32)
+                    volumes = cp.array(df["volume"].values, dtype=cp.float32)
 
                     # Calculate moving averages
                     window_5 = 5
                     window_20 = 20
 
                     # Use optimized algorithms for better performance
-                    # Simple moving averages - use cumsum for faster calculation
+                    # Simple moving averages - use cumsum for faster
+                    # calculation
                     padded_prices = cp.pad(
-                        close_prices, (window_5-1, 0), 'constant')
+                        close_prices, (window_5 - 1, 0), "constant")
                     cumsum = cp.cumsum(padded_prices)
                     sma_5 = (cumsum[window_5:] - cumsum[:-window_5]) / window_5
 
                     padded_prices = cp.pad(
-                        close_prices, (window_20-1, 0), 'constant')
+                        close_prices, (window_20 - 1, 0), "constant")
                     cumsum = cp.cumsum(padded_prices)
                     sma_20 = (cumsum[window_20:] -
                               cumsum[:-window_20]) / window_20
@@ -1313,30 +1539,65 @@ class PolygonRESTClient:
                     return self._process_data_with_cpu(data)
 
                 # Create result DataFrame
-                result_df = pd.DataFrame({
-                    'ticker': ticker,
-                    'last_price': df['close'].iloc[-1],
-                    'sma_5': sma_5_np[-1] if len(sma_5_np) > 0 else None,
-                    'sma_20': sma_20_np[-1] if len(sma_20_np) > 0 else None,
-                    'vwap': vwap_np,
-                    'rsi': rsi_np,
-                    'volume': df['volume'].sum()
-                }, index=[0])
+                result_df = pd.DataFrame(
+                    {
+                        "ticker": ticker,
+                        "last_price": df["close"].iloc[-1],
+                        "sma_5": sma_5_np[-1] if len(sma_5_np) > 0 else None,
+                        "sma_20": sma_20_np[-1] if len(sma_20_np) > 0 else None,
+                        "vwap": vwap_np,
+                        "rsi": rsi_np,
+                        "volume": df["volume"].sum(),
+                    },
+                    index=[0],
+                )
 
                 results[ticker] = result_df
 
                 # Store in Redis if available
                 if self.redis_client:
-                    self.redis_client.hmset(f"stock:{ticker}:technical", {
-                        "sma_5": float(sma_5_np[-1]) if len(sma_5_np) > 0 else 0,
-                        "sma_20": float(sma_20_np[-1]) if len(sma_20_np) > 0 else 0,
-                        "vwap": float(vwap_np),
-                        "rsi": float(rsi_np),
-                        "last_update": datetime.now().isoformat()
-                    })
+                    self.redis_client.hmset(
+                        f"stock:{ticker}:technical",
+                        {
+                            "sma_5": float(sma_5_np[-1]) if len(sma_5_np) > 0 else 0,
+                            "sma_20": float(sma_20_np[-1]) if len(sma_20_np) > 0 else 0,
+                            "vwap": float(vwap_np),
+                            "rsi": float(rsi_np),
+                            "last_update": datetime.now().isoformat(),
+                        },
+                    )
+
+                    # Send notification to frontend about successful GPU processing
+                    self._send_frontend_notification(
+                        message=f"GPU-accelerated analysis completed for {ticker}",
+                        level="success",
+                        category="gpu_processing",
+                        details={
+                            "ticker": ticker,
+                            "sma_5": float(sma_5_np[-1]) if len(sma_5_np) > 0 else 0,
+                            "sma_20": float(sma_20_np[-1]) if len(sma_20_np) > 0 else 0,
+                            "vwap": float(vwap_np),
+                            "rsi": float(rsi_np),
+                            "processing_time": time.time() - start_time if 'start_time' in locals() else 0
+                        }
+                    )
 
             except Exception as e:
-                logger.error(f"Error processing data for {ticker} on GPU: {e}")
+                logger.exception(
+                    f"Error processing data for {ticker} on GPU: {e}")
+
+                # Send error notification to frontend
+                if self.redis_client:
+                    self._send_frontend_notification(
+                        message=f"Error processing {ticker} data on GPU: {str(e)}",
+                        level="error",
+                        category="gpu_processing",
+                        details={
+                            "ticker": ticker,
+                            "error_type": type(e).__name__,
+                            "fallback": "CPU processing may be used"
+                        }
+                    )
 
         return results
 
@@ -1358,17 +1619,22 @@ class PolygonRESTClient:
 
             try:
                 # Calculate indicators using pandas
-                sma_5 = df['close'].rolling(
+                sma_5 = df["close"].rolling(
                     5).mean().iloc[-1] if len(df) >= 5 else None
-                sma_20 = df['close'].rolling(
-                    20).mean().iloc[-1] if len(df) >= 20 else None
+                sma_20 = (
+                    df["close"].rolling(20).mean(
+                    ).iloc[-1] if len(df) >= 20 else None
+                )
 
                 # Calculate VWAP
-                vwap = (df['close'] * df['volume']).sum() / \
-                    df['volume'].sum() if df['volume'].sum() > 0 else 0
+                vwap = (
+                    (df["close"] * df["volume"]).sum() / df["volume"].sum()
+                    if df["volume"].sum() > 0
+                    else 0
+                )
 
                 # Calculate RSI
-                delta = df['close'].diff()
+                delta = df["close"].diff()
                 gain = delta.where(delta > 0, 0)
                 loss = -delta.where(delta < 0, 0)
 
@@ -1381,34 +1647,71 @@ class PolygonRESTClient:
                 rsi = 100 - (100 / (1 + rs))
 
                 # Create result DataFrame
-                result_df = pd.DataFrame({
-                    'ticker': ticker,
-                    'last_price': df['close'].iloc[-1],
-                    'sma_5': sma_5,
-                    'sma_20': sma_20,
-                    'vwap': vwap,
-                    'rsi': rsi,
-                    'volume': df['volume'].sum()
-                }, index=[0])
+                result_df = pd.DataFrame(
+                    {
+                        "ticker": ticker,
+                        "last_price": df["close"].iloc[-1],
+                        "sma_5": sma_5,
+                        "sma_20": sma_20,
+                        "vwap": vwap,
+                        "rsi": rsi,
+                        "volume": df["volume"].sum(),
+                    },
+                    index=[0],
+                )
 
                 results[ticker] = result_df
 
                 # Store in Redis if available
                 if self.redis_client:
-                    self.redis_client.hmset(f"stock:{ticker}:technical", {
-                        "sma_5": float(sma_5) if sma_5 is not None else 0,
-                        "sma_20": float(sma_20) if sma_20 is not None else 0,
-                        "vwap": float(vwap),
-                        "rsi": float(rsi),
-                        "last_update": datetime.now().isoformat()
-                    })
+                    self.redis_client.hmset(
+                        f"stock:{ticker}:technical",
+                        {
+                            "sma_5": float(sma_5) if sma_5 is not None else 0,
+                            "sma_20": float(sma_20) if sma_20 is not None else 0,
+                            "vwap": float(vwap),
+                            "rsi": float(rsi),
+                            "last_update": datetime.now().isoformat(),
+                        },
+                    )
+
+                    # Send notification to frontend about market data processing
+                    # Only send periodically to avoid flooding
+                    if random.random() < 0.1:  # 10% chance to send notification
+                        self._send_frontend_notification(
+                            message=f"Processed market data for {ticker}",
+                            level="info",
+                            category="market_data_stream",
+                            details={
+                                "ticker": ticker,
+                                "sma_5": float(sma_5) if sma_5 is not None else 0,
+                                "sma_20": float(sma_20) if sma_20 is not None else 0,
+                                "vwap": float(vwap),
+                                "rsi": float(rsi),
+                                "timestamp": datetime.now().isoformat()
+                            }
+                        )
 
             except Exception as e:
-                logger.error(f"Error processing data for {ticker} on CPU: {e}")
+                logger.exception(
+                    f"Error processing data for {ticker} on CPU: {e}")
+
+                # Send error notification to frontend
+                if self.redis_client:
+                    self._send_frontend_notification(
+                        message=f"Error processing market data for {ticker}",
+                        level="error",
+                        category="market_data_stream",
+                        details={
+                            "ticker": ticker,
+                            "error_type": type(e).__name__,
+                            "error": str(e)
+                        }
+                    )
 
         return results
 
-    async def close(self):
+    async def close(self) -> None:
         """Close all connections and resources"""
         logger.info("Closing Polygon API client")
         self.running = False
@@ -1435,12 +1738,19 @@ class PolygonRESTClient:
 # POLYGON WEBSOCKET CLIENT #
 ##############################
 
+
 class PolygonWebSocketClient:
     """GPU-Optimized client for the Polygon.io WebSocket API"""
 
-    def __init__(self, api_key=POLYGON_API_KEY, redis_client=None, use_gpu=USE_GPU,
-                 max_reconnect_attempts=MAX_RECONNECT_ATTEMPTS,
-                 reconnect_delay=RECONNECT_DELAY, buffer_size=BUFFER_SIZE):
+    def __init__(
+        self,
+        api_key=POLYGON_API_KEY,
+        redis_client=None,
+        use_gpu=USE_GPU,
+        max_reconnect_attempts=MAX_RECONNECT_ATTEMPTS,
+        reconnect_delay=RECONNECT_DELAY,
+        buffer_size=BUFFER_SIZE,
+    ) -> None:
         """
         Initialize GPU-Optimized Polygon WebSocket client
 
@@ -1462,12 +1772,14 @@ class PolygonWebSocketClient:
         # Verify API key is provided
         if not self.api_key:
             logger.warning(
-                "No API key provided. Set the POLYGON_API_KEY environment variable.")
+                "No API key provided. Set the POLYGON_API_KEY environment variable.",
+            )
             logger.error(
                 "API key is required for Polygon.io WebSocket connection")
         else:
             logger.info(
-                f"Initialized Polygon WebSocket client with API key: {self.api_key[:4]}****{self.api_key[-4:] if len(self.api_key) > 8 else ''}")
+                f"Initialized Polygon WebSocket client with API key: {self.api_key[:4]}****{self.api_key[-4:] if len(self.api_key) > 8 else ''}",
+            )
 
         # WebSocket connection
         self.ws = None
@@ -1507,12 +1819,52 @@ class PolygonWebSocketClient:
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
 
-    def _handle_signal(self, signum, frame):
+    def _handle_signal(self, signum, frame) -> None:
         """Handle signals for graceful shutdown"""
         logger.info(f"Received signal {signum}, shutting down gracefully")
         self.stop()
 
-    async def _connect(self):
+    def _send_frontend_notification(self, message, level="info", category="websocket", details=None):
+        """
+        Send notification to frontend via Redis
+
+        Args:
+            message: Notification message
+            level: Notification level (info, success, warning, error)
+            category: Notification category
+            details: Additional details as dictionary
+        """
+        if not self.redis_client:
+            return
+
+        try:
+            notification = {
+                "timestamp": time.time(),
+                "message": message,
+                "level": level,
+                "category": category,
+                "source": "polygon_websocket",
+                "details": details or {}
+            }
+
+            # Add to notifications list
+            self.redis_client.lpush(
+                "frontend:notifications", json.dumps(notification))
+
+            # Trim list to prevent unbounded growth
+            self.redis_client.ltrim("frontend:notifications", 0, 999)
+
+            # Publish event for real-time updates
+            self.redis_client.publish("frontend:events", json.dumps({
+                "type": "notification",
+                "data": notification
+            }))
+
+            logger.debug(f"Sent frontend notification: {message}")
+        except Exception as e:
+            logger.error(f"Error sending frontend notification: {e}")
+
+    async def _connect(self) -> bool | None:
         """Establish WebSocket connection"""
         if not self.api_key:
             logger.error("Cannot connect: No API key provided")
@@ -1532,27 +1884,70 @@ class PolygonWebSocketClient:
             response = await self.ws.recv()
             response_data = json.loads(response)
 
-            if isinstance(response_data, list) and response_data and response_data[0].get('status') == 'connected':
+            if (
+                isinstance(response_data, list)
+                and response_data
+                and response_data[0].get("status") == "connected"
+            ):
                 logger.info("Authentication successful")
                 self.connected = True
                 self.reconnect_count = 0
                 self.last_heartbeat = time.time()
+
+                # Send notification to frontend
+                if self.redis_client:
+                    self._send_frontend_notification(
+                        message="Connected to Polygon WebSocket API",
+                        level="success",
+                        category="websocket_connection",
+                        details={
+                            "connection_url": self.ws_url,
+                            "subscription_count": len(self.subscriptions),
+                            "reconnect_count": self.reconnect_count
+                        }
+                    )
 
                 # Resubscribe to previous subscriptions
                 if self.subscriptions:
                     await self._resubscribe()
 
                 return True
-            else:
-                logger.error(f"Authentication failed: {response_data}")
-                return False
+            logger.error(f"Authentication failed: {response_data}")
 
-        except Exception as e:
-            logger.error(f"Connection error: {e}")
-            self.connected = False
+            # Send notification to frontend
+            if self.redis_client:
+                self._send_frontend_notification(
+                    message="Failed to authenticate with Polygon WebSocket API",
+                    level="error",
+                    category="websocket_connection",
+                    details={
+                        "error": str(response_data),
+                        "connection_url": self.ws_url
+                    }
+                )
+
             return False
 
-    async def _authenticate(self):
+        except Exception as e:
+            logger.exception(f"Connection error: {e}")
+            self.connected = False
+
+            # Send notification to frontend
+            if self.redis_client:
+                self._send_frontend_notification(
+                    message=f"WebSocket connection error: {str(e)}",
+                    level="error",
+                    category="websocket_connection",
+                    details={
+                        "error_type": type(e).__name__,
+                        "connection_url": self.ws_url,
+                        "reconnect_count": self.reconnect_count
+                    }
+                )
+
+            return False
+
+    async def _authenticate(self) -> None:
         """Authenticate with the Polygon WebSocket API"""
         try:
             # Send authentication message
@@ -1560,10 +1955,10 @@ class PolygonWebSocketClient:
             await self.ws.send(json.dumps(auth_message))
             logger.info("Sent authentication request")
         except Exception as e:
-            logger.error(f"Authentication error: {e}")
+            logger.exception(f"Authentication error: {e}")
             raise
 
-    async def _resubscribe(self):
+    async def _resubscribe(self) -> None:
         """Resubscribe to all previous subscriptions"""
         if not self.subscriptions:
             return
@@ -1583,24 +1978,53 @@ class PolygonWebSocketClient:
         # Subscribe to each cluster
         for cluster, subs in subscriptions_by_cluster.items():
             subscribe_message = {
-                "action": "subscribe",
-                "params": ",".join(subs)
-            }
+                "action": "subscribe", "params": ",".join(subs)}
 
             try:
                 await self.ws.send(json.dumps(subscribe_message))
                 logger.info(f"Resubscribed to {len(subs)} {cluster} channels")
-            except Exception as e:
-                logger.error(f"Error resubscribing to {cluster} channels: {e}")
 
-    async def _heartbeat(self):
+                # Send notification to frontend
+                if self.redis_client:
+                    self._send_frontend_notification(
+                        message=f"Resubscribed to {len(subs)} {cluster} channels",
+                        level="info",
+                        category="websocket_subscription",
+                        details={
+                            "cluster": cluster,
+                            "channel_count": len(subs),
+                            "channels": subs[:10] + (["..."] if len(subs) > 10 else [])
+                        }
+                    )
+
+            except Exception as e:
+                logger.exception(
+                    f"Error resubscribing to {cluster} channels: {e}")
+
+                # Send notification to frontend
+                if self.redis_client:
+                    self._send_frontend_notification(
+                        message=f"Failed to resubscribe to {cluster} channels",
+                        level="error",
+                        category="websocket_subscription",
+                        details={
+                            "cluster": cluster,
+                            "error_type": type(e).__name__,
+                            "error": str(e)
+                        }
+                    )
+
+    async def _heartbeat(self) -> None:
         """Send heartbeat messages and monitor connection health"""
         while self.running and self.connected:
             try:
                 # Check if we've received a heartbeat recently
-                if time.time() - self.last_heartbeat > 30:  # No heartbeat for 30 seconds
+                if (
+                    time.time() - self.last_heartbeat > 30
+                ):  # No heartbeat for 30 seconds
                     logger.warning(
-                        "No heartbeat received for 30 seconds, reconnecting...")
+                        "No heartbeat received for 30 seconds, reconnecting...",
+                    )
                     self.connected = False
                     await self._reconnect()
                     continue
@@ -1612,28 +2036,31 @@ class PolygonWebSocketClient:
                 logger.info("Heartbeat task cancelled")
                 break
             except Exception as e:
-                logger.error(f"Error in heartbeat task: {e}")
+                logger.exception(f"Error in heartbeat task: {e}")
                 await asyncio.sleep(5)
 
     async def _reconnect(self):
         """Attempt to reconnect to the WebSocket"""
         if self.reconnect_count >= self.max_reconnect_attempts:
             logger.error(
-                f"Maximum reconnection attempts ({self.max_reconnect_attempts}) reached")
+                f"Maximum reconnection attempts ({self.max_reconnect_attempts}) reached"
+            )
             self.running = False
             return False
 
         self.reconnect_count += 1
-        delay = self.reconnect_delay * \
-            (2 ** (self.reconnect_count - 1))  # Exponential backoff
+        delay = self.reconnect_delay * (
+            2 ** (self.reconnect_count - 1)
+        )  # Exponential backoff
 
         logger.info(
-            f"Attempting to reconnect (attempt {self.reconnect_count}/{self.max_reconnect_attempts}) in {delay:.2f} seconds...")
+            f"Attempting to reconnect (attempt {self.reconnect_count}/{self.max_reconnect_attempts}) in {delay:.2f} seconds...",
+        )
 
         # Update Prometheus metrics if available
         if PROMETHEUS_AVAILABLE:
             API_WEBSOCKET_RECONNECTS.labels(
-                client='polygon', endpoint='stocks').inc()
+                client="polygon", endpoint="stocks").inc()
 
         try:
             # Close existing connection if any
@@ -1647,18 +2074,18 @@ class PolygonWebSocketClient:
             return await self._connect()
 
         except Exception as e:
-            logger.error(f"Reconnection error: {e}")
+            logger.exception(f"Reconnection error: {e}")
             # Update error metrics
             if PROMETHEUS_AVAILABLE:
                 API_ERROR_COUNT.labels(
-                    client='polygon',
-                    endpoint='websocket',
-                    method='reconnect',
-                    error_type=type(e).__name__
+                    client="polygon",
+                    endpoint="websocket",
+                    method="reconnect",
+                    error_type=type(e).__name__,
                 ).inc()
             return False
 
-    async def _listen(self):
+    async def _listen(self) -> None:
         """Listen for WebSocket messages"""
         while self.running:
             try:
@@ -1699,67 +2126,123 @@ class PolygonWebSocketClient:
                 break
 
             except Exception as e:
-                logger.error(f"Error in listen task: {e}")
+                logger.exception(f"Error in listen task: {e}")
                 self.connected = False
                 await asyncio.sleep(1)
 
-    async def _process_message(self, message):
+    async def _process_message(self, message) -> None:
         """Process a WebSocket message"""
         # Check for status messages
-        if 'status' in message:
-            status = message.get('status')
+        if "status" in message:
+            status = message.get("status")
 
-            if status == 'connected':
+            if status == "connected":
                 logger.info("Connected to Polygon WebSocket")
+                if self.redis_client:
+                    self._send_frontend_notification(
+                        message="Connected to Polygon WebSocket",
+                        level="success",
+                        category="websocket_status",
+                        details={"status": "connected"}
+                    )
 
-            elif status == 'auth_success':
+            elif status == "auth_success":
                 logger.info("Authentication successful")
+                if self.redis_client:
+                    self._send_frontend_notification(
+                        message="Authentication successful with Polygon WebSocket",
+                        level="success",
+                        category="websocket_status",
+                        details={"status": "authenticated"}
+                    )
 
-            elif status == 'success':
-                if message.get('message') == 'authenticated':
+            elif status == "success":
+                if message.get("message") == "authenticated":
                     logger.info("Authentication successful")
+                    if self.redis_client:
+                        self._send_frontend_notification(
+                            message="Authentication successful with Polygon WebSocket",
+                            level="success",
+                            category="websocket_status",
+                            details={"status": "authenticated"}
+                        )
                 else:
-                    action = message.get('action')
-                    if action == 'subscribe':
+                    action = message.get("action")
+                    if action == "subscribe":
+                        params = message.get('params', '')
+                        logger.info(f"Successfully subscribed to: {params}")
+                        if self.redis_client:
+                            self._send_frontend_notification(
+                                message=f"Successfully subscribed to market data channels",
+                                level="success",
+                                category="websocket_subscription",
+                                details={
+                                    "channels": params,
+                                    "action": "subscribe"
+                                }
+                            )
+                    elif action == "unsubscribe":
+                        params = message.get('params', '')
                         logger.info(
-                            f"Successfully subscribed to: {message.get('params', '')}")
-                    elif action == 'unsubscribe':
-                        logger.info(
-                            f"Successfully unsubscribed from: {message.get('params', '')}")
+                            f"Successfully unsubscribed from: {params}")
+                        if self.redis_client:
+                            self._send_frontend_notification(
+                                message=f"Successfully unsubscribed from market data channels",
+                                level="info",
+                                category="websocket_subscription",
+                                details={
+                                    "channels": params,
+                                    "action": "unsubscribe"
+                                }
+                            )
 
-            elif status == 'error':
-                logger.error(
-                    f"Error from Polygon WebSocket: {message.get('message', '')}")
+            elif status == "error":
+                error_msg = message.get('message', '')
+                logger.error(f"Error from Polygon WebSocket: {error_msg}")
+                if self.redis_client:
+                    self._send_frontend_notification(
+                        message=f"Error from Polygon WebSocket: {error_msg}",
+                        level="error",
+                        category="websocket_error",
+                        details={
+                            "error": error_msg,
+                            "raw_message": message
+                        }
+                    )
 
             return
 
         # Handle data messages
-        event_type = message.get('ev')
+        event_type = message.get("ev")
         if not event_type:
             logger.warning(f"Received message without event type: {message}")
             return
 
         # Buffer messages for batch processing
         with self.buffer_lock:
-            if event_type == 'T':  # Trade
+            if event_type == "T":  # Trade
                 self.trade_buffer.append(message)
                 if len(self.trade_buffer) >= self.buffer_size:
                     # Process trade buffer
                     trades_to_process = self.trade_buffer.copy()
                     self.trade_buffer = []
                     self.thread_pool.submit(
-                        self._process_trade_batch, trades_to_process)
+                        self._process_trade_batch,
+                        trades_to_process,
+                    )
 
-            elif event_type == 'Q':  # Quote
+            elif event_type == "Q":  # Quote
                 self.quote_buffer.append(message)
                 if len(self.quote_buffer) >= self.buffer_size:
                     # Process quote buffer
                     quotes_to_process = self.quote_buffer.copy()
                     self.quote_buffer = []
                     self.thread_pool.submit(
-                        self._process_quote_batch, quotes_to_process)
+                        self._process_quote_batch,
+                        quotes_to_process,
+                    )
 
-            elif event_type in ['AM', 'A']:  # Aggregates
+            elif event_type in ["AM", "A"]:  # Aggregates
                 self.agg_buffer.append(message)
                 if len(self.agg_buffer) >= self.buffer_size:
                     # Process aggregate buffer
@@ -1774,10 +2257,10 @@ class PolygonWebSocketClient:
                 try:
                     handler(message)
                 except Exception as e:
-                    logger.error(
+                    logger.exception(
                         f"Error in message handler for {event_type}: {e}")
 
-    def _process_trade_batch(self, trades):
+    def _process_trade_batch(self, trades) -> None:
         """Process a batch of trade messages with GPU acceleration"""
         if not trades:
             return
@@ -1786,12 +2269,14 @@ class PolygonWebSocketClient:
             # Update Prometheus metrics if available
             if PROMETHEUS_AVAILABLE:
                 API_WEBSOCKET_MESSAGES.labels(
-                    client='polygon', message_type='trade').inc(len(trades))
+                    client="polygon",
+                    message_type="trade",
+                ).inc(len(trades))
 
             # Group trades by ticker
             trades_by_ticker = {}
             for trade in trades:
-                ticker = trade.get('sym')
+                ticker = trade.get("sym")
                 if ticker not in trades_by_ticker:
                     trades_by_ticker[ticker] = []
                 trades_by_ticker[ticker].append(trade)
@@ -1799,15 +2284,18 @@ class PolygonWebSocketClient:
             # Process each ticker's trades
             for ticker, ticker_trades in trades_by_ticker.items():
                 # Extract trade data
-                prices = [t.get('p', 0) for t in ticker_trades]
-                sizes = [t.get('s', 0) for t in ticker_trades]
-                timestamps = [t.get('t', 0) for t in ticker_trades]
+                prices = [t.get("p", 0) for t in ticker_trades]
+                sizes = [t.get("s", 0) for t in ticker_trades]
+                # timestamps not used directly but extracted for completeness
 
                 # Record GPU processing start time
                 gpu_start_time = time.time()
 
                 # Use GPU for calculations if available
-                if self.gpu_accelerator.use_gpu and self.gpu_accelerator.gpu_initialized:
+                if (
+                    self.gpu_accelerator.use_gpu
+                    and self.gpu_accelerator.gpu_initialized
+                ):
                     if CUPY_AVAILABLE:
                         # Convert to CuPy arrays
                         cp_prices = cp.array(prices, dtype=cp.float32)
@@ -1817,7 +2305,9 @@ class PolygonWebSocketClient:
                         price_volume = cp_prices * cp_sizes
                         total_price_volume = cp.sum(price_volume)
                         total_volume = cp.sum(cp_sizes)
-                        vwap = total_price_volume / total_volume if total_volume > 0 else 0
+                        vwap = (
+                            total_price_volume / total_volume if total_volume > 0 else 0
+                        )
 
                         # Calculate statistics
                         avg_price = cp.mean(cp_prices)
@@ -1834,7 +2324,8 @@ class PolygonWebSocketClient:
                         if PROMETHEUS_AVAILABLE:
                             device_id = cp.cuda.Device().id
                             device_props = cp.cuda.runtime.getDeviceProperties(
-                                device_id)
+                                device_id,
+                            )
                             device_name = device_props["name"].decode()
                             mem_info = cp.cuda.runtime.memGetInfo()
                             # total - free = used
@@ -1846,7 +2337,9 @@ class PolygonWebSocketClient:
                         price_volume = np.array(prices) * np.array(sizes)
                         total_price_volume = np.sum(price_volume)
                         total_volume = np.sum(sizes)
-                        vwap = total_price_volume / total_volume if total_volume > 0 else 0
+                        vwap = (
+                            total_price_volume / total_volume if total_volume > 0 else 0
+                        )
 
                         avg_price = np.mean(prices)
                         max_price = np.max(prices)
@@ -1865,63 +2358,75 @@ class PolygonWebSocketClient:
                 # Record GPU processing time
                 gpu_processing_time = time.time() - gpu_start_time
                 if PROMETHEUS_AVAILABLE:
-                    GPU_PROCESSING_TIME.labels(
-                        operation='trade_processing').observe(gpu_processing_time)
+                    GPU_PROCESSING_TIME.labels(operation="trade_processing").observe(
+                        gpu_processing_time,
+                    )
 
                 # Get latest trade
-                latest_trade = max(ticker_trades, key=lambda t: t.get('t', 0))
-                latest_price = latest_trade.get('p', 0)
-                latest_size = latest_trade.get('s', 0)
-                latest_timestamp = latest_trade.get('t', 0)
+                latest_trade = max(ticker_trades, key=lambda t: t.get("t", 0))
+                latest_price = latest_trade.get("p", 0)
+                latest_size = latest_trade.get("s", 0)
+                latest_timestamp = latest_trade.get("t", 0)
 
                 # Store in Redis if available
                 if self.redis_client:
                     # Update last trade
-                    self.redis_client.hmset(f"stock:{ticker}:last_trade", {
-                        "price": latest_price,
-                        "size": latest_size,
-                        "timestamp": latest_timestamp,
-                        "exchange": latest_trade.get('x', '')
-                    })
+                    self.redis_client.hmset(
+                        f"stock:{ticker}:last_trade",
+                        {
+                            "price": latest_price,
+                            "size": latest_size,
+                            "timestamp": latest_timestamp,
+                            "exchange": latest_trade.get("x", ""),
+                        },
+                    )
 
                     # Update last price
-                    self.redis_client.hmset(f"stock:{ticker}:last_price", {
-                        "price": latest_price,
-                        "timestamp": latest_timestamp
-                    })
+                    self.redis_client.hmset(
+                        f"stock:{ticker}:last_price",
+                        {"price": latest_price, "timestamp": latest_timestamp},
+                    )
 
                     # Store trade statistics
-                    self.redis_client.hmset(f"stock:{ticker}:trade_stats", {
-                        "vwap": vwap,
-                        "avg_price": avg_price,
-                        "max_price": max_price,
-                        "min_price": min_price,
-                        "total_volume": int(total_volume),
-                        "trade_count": len(ticker_trades),
-                        "last_update": datetime.now().isoformat()
-                    })
+                    self.redis_client.hmset(
+                        f"stock:{ticker}:trade_stats",
+                        {
+                            "vwap": vwap,
+                            "avg_price": avg_price,
+                            "max_price": max_price,
+                            "min_price": min_price,
+                            "total_volume": int(total_volume),
+                            "trade_count": len(ticker_trades),
+                            "last_update": datetime.now().isoformat(),
+                        },
+                    )
 
                     # Publish update to subscribers
-                    self.redis_client.publish(f"price_update:{ticker}", json.dumps({
-                        "type": "trade",
-                        "ticker": ticker,
-                        "price": latest_price,
-                        "size": latest_size,
-                        "timestamp": latest_timestamp
-                    }))
+                    self.redis_client.publish(
+                        f"price_update:{ticker}",
+                        json.dumps(
+                            {
+                                "type": "trade",
+                                "ticker": ticker,
+                                "price": latest_price,
+                                "size": latest_size,
+                                "timestamp": latest_timestamp,
+                            },
+                        ),
+                    )
 
         except Exception as e:
-            logger.error(f"Error processing trade batch: {e}")
+            logger.exception(f"Error processing trade batch: {e}")
             # Update error metrics
             if PROMETHEUS_AVAILABLE:
                 API_ERROR_COUNT.labels(
-                    client='polygon',
-                    endpoint='websocket',
-                    method='trade_processing',
-                    error_type=type(e).__name__
+                    client="polygon",
+                    endpoint="websocket",
+                    method="trade_processing",
+                    error_type=type(e).__name__,
                 ).inc()
 
-    def _process_quote_batch(self, quotes):
+    def _process_quote_batch(self, quotes) -> None:
         """Process a batch of quote messages with GPU acceleration"""
         if not quotes:
             return
@@ -1930,7 +2435,7 @@ class PolygonWebSocketClient:
             # Group quotes by ticker
             quotes_by_ticker = {}
             for quote in quotes:
-                ticker = quote.get('sym')
+                ticker = quote.get("sym")
                 if ticker not in quotes_by_ticker:
                     quotes_by_ticker[ticker] = []
                 quotes_by_ticker[ticker].append(quote)
@@ -1938,14 +2443,19 @@ class PolygonWebSocketClient:
             # Process each ticker's quotes
             for ticker, ticker_quotes in quotes_by_ticker.items():
                 # Extract quote data
-                bid_prices = [q.get('bp', 0) for q in ticker_quotes]
-                bid_sizes = [q.get('bs', 0) for q in ticker_quotes]
-                ask_prices = [q.get('ap', 0) for q in ticker_quotes]
-                ask_sizes = [q.get('as', 0) for q in ticker_quotes]
-                timestamps = [q.get('t', 0) for q in ticker_quotes]
+                bid_prices = [q.get("bp", 0) for q in ticker_quotes]
+                # bid_sizes extracted but used in Redis storage later
+                [q.get("bs", 0) for q in ticker_quotes]
+                ask_prices = [q.get("ap", 0) for q in ticker_quotes]
+                # ask_sizes extracted but used in Redis storage later
+                [q.get("as", 0) for q in ticker_quotes]
+                # timestamps not used directly but extracted for completeness
 
                 # Use GPU for calculations if available
-                if self.gpu_accelerator.use_gpu and self.gpu_accelerator.gpu_initialized:
+                if (
+                    self.gpu_accelerator.use_gpu
+                    and self.gpu_accelerator.gpu_initialized
+                ):
                     if CUPY_AVAILABLE:
                         # Convert to CuPy arrays
                         cp_bid_prices = cp.array(bid_prices, dtype=cp.float32)
@@ -1970,10 +2480,13 @@ class PolygonWebSocketClient:
                         avg_spread = float(cp.asnumpy(avg_spread))
                     else:
                         # Fallback to CPU calculations
-                        mid_prices = [(b + a) / 2 for b,
-                                      a in zip(bid_prices, ask_prices)]
-                        spreads = [a - b for a,
-                                   b in zip(ask_prices, bid_prices)]
+                        mid_prices = [
+                            (b + a) / 2
+                            for b, a in zip(bid_prices, ask_prices, strict=False)
+                        ]
+                        spreads = [
+                            a - b for a, b in zip(ask_prices, bid_prices, strict=False)
+                        ]
 
                         avg_bid = np.mean(bid_prices)
                         avg_ask = np.mean(ask_prices)
@@ -1981,9 +2494,13 @@ class PolygonWebSocketClient:
                         avg_spread = np.mean(spreads)
                 else:
                     # CPU calculations
-                    mid_prices = [(b + a) / 2 for b,
-                                  a in zip(bid_prices, ask_prices)]
-                    spreads = [a - b for a, b in zip(ask_prices, bid_prices)]
+                    mid_prices = [
+                        (b + a) / 2
+                        for b, a in zip(bid_prices, ask_prices, strict=False)
+                    ]
+                    spreads = [
+                        a - b for a, b in zip(ask_prices, bid_prices, strict=False)
+                    ]
 
                     avg_bid = np.mean(bid_prices)
                     avg_ask = np.mean(ask_prices)
@@ -1991,51 +2508,67 @@ class PolygonWebSocketClient:
                     avg_spread = np.mean(spreads)
 
                 # Get latest quote
-                latest_quote = max(ticker_quotes, key=lambda q: q.get('t', 0))
-                latest_bid = latest_quote.get('bp', 0)
-                latest_ask = latest_quote.get('ap', 0)
-                latest_bid_size = latest_quote.get('bs', 0)
-                latest_ask_size = latest_quote.get('as', 0)
-                latest_timestamp = latest_quote.get('t', 0)
-                latest_mid = (latest_bid + latest_ask) / \
-                    2 if latest_bid > 0 and latest_ask > 0 else 0
-                latest_spread = latest_ask - latest_bid if latest_bid > 0 and latest_ask > 0 else 0
+                latest_quote = max(ticker_quotes, key=lambda q: q.get("t", 0))
+                latest_bid = latest_quote.get("bp", 0)
+                latest_ask = latest_quote.get("ap", 0)
+                latest_bid_size = latest_quote.get("bs", 0)
+                latest_ask_size = latest_quote.get("as", 0)
+                latest_timestamp = latest_quote.get("t", 0)
+                latest_mid = (
+                    (latest_bid + latest_ask) / 2
+                    if latest_bid > 0 and latest_ask > 0
+                    else 0
+                )
+                latest_spread = (
+                    latest_ask - latest_bid if latest_bid > 0 and latest_ask > 0 else 0
+                )
 
                 # Store in Redis if available
                 if self.redis_client:
                     # Update last quote
-                    self.redis_client.hmset(f"stock:{ticker}:last_quote", {
-                        "bid_price": latest_bid,
-                        "bid_size": latest_bid_size,
-                        "ask_price": latest_ask,
-                        "ask_size": latest_ask_size,
-                        "mid_price": latest_mid,
-                        "spread": latest_spread,
-                        "timestamp": latest_timestamp
-                    })
+                    self.redis_client.hmset(
+                        f"stock:{ticker}:last_quote",
+                        {
+                            "bid_price": latest_bid,
+                            "bid_size": latest_bid_size,
+                            "ask_price": latest_ask,
+                            "ask_size": latest_ask_size,
+                            "mid_price": latest_mid,
+                            "spread": latest_spread,
+                            "timestamp": latest_timestamp,
+                        },
+                    )
 
                     # Update last price
-                    self.redis_client.hmset(f"stock:{ticker}:last_price", {
-                        "bid": latest_bid,
-                        "ask": latest_ask,
-                        "mid": latest_mid,
-                        "timestamp": latest_timestamp
-                    })
+                    self.redis_client.hmset(
+                        f"stock:{ticker}:last_price",
+                        {
+                            "bid": latest_bid,
+                            "ask": latest_ask,
+                            "mid": latest_mid,
+                            "timestamp": latest_timestamp,
+                        },
+                    )
 
                     # Publish update to subscribers
-                    self.redis_client.publish(f"price_update:{ticker}", json.dumps({
-                        "type": "quote",
-                        "ticker": ticker,
-                        "bid": latest_bid,
-                        "ask": latest_ask,
-                        "mid": latest_mid,
-                        "timestamp": latest_timestamp
-                    }))
+                    self.redis_client.publish(
+                        f"price_update:{ticker}",
+                        json.dumps(
+                            {
+                                "type": "quote",
+                                "ticker": ticker,
+                                "bid": latest_bid,
+                                "ask": latest_ask,
+                                "mid": latest_mid,
+                                "timestamp": latest_timestamp,
+                            },
+                        ),
+                    )
 
         except Exception as e:
-            logger.error(f"Error processing quote batch: {e}")
+            logger.exception(f"Error processing quote batch: {e}")
 
-    def _process_agg_batch(self, aggs):
+    def _process_agg_batch(self, aggs) -> None:
         """Process a batch of aggregate messages with GPU acceleration"""
         if not aggs:
             return
@@ -2044,79 +2577,84 @@ class PolygonWebSocketClient:
             # Group aggregates by ticker
             aggs_by_ticker = {}
             for agg in aggs:
-                ticker = agg.get('sym')
+                ticker = agg.get("sym")
                 if ticker not in aggs_by_ticker:
                     aggs_by_ticker[ticker] = []
                 aggs_by_ticker[ticker].append(agg)
 
             # Process each ticker's aggregates
             for ticker, ticker_aggs in aggs_by_ticker.items():
-                # Extract aggregate data
-                opens = [a.get('o', 0) for a in ticker_aggs]
-                highs = [a.get('h', 0) for a in ticker_aggs]
-                lows = [a.get('l', 0) for a in ticker_aggs]
-                closes = [a.get('c', 0) for a in ticker_aggs]
-                volumes = [a.get('v', 0) for a in ticker_aggs]
-                timestamps = [a.get('s', 0)
-                              for a in ticker_aggs]  # Start timestamps
+                # We don't need to extract all aggregate data here since we're just
+                # using the latest aggregate for Redis storage
 
                 # Get latest aggregate
-                latest_agg = max(ticker_aggs, key=lambda a: a.get('s', 0))
-                latest_open = latest_agg.get('o', 0)
-                latest_high = latest_agg.get('h', 0)
-                latest_low = latest_agg.get('l', 0)
-                latest_close = latest_agg.get('c', 0)
-                latest_volume = latest_agg.get('v', 0)
-                latest_timestamp = latest_agg.get('s', 0)
+                latest_agg = max(ticker_aggs, key=lambda a: a.get("s", 0))
+                latest_open = latest_agg.get("o", 0)
+                latest_high = latest_agg.get("h", 0)
+                latest_low = latest_agg.get("l", 0)
+                latest_close = latest_agg.get("c", 0)
+                latest_volume = latest_agg.get("v", 0)
+                latest_timestamp = latest_agg.get("s", 0)
 
                 # Store in Redis if available
                 if self.redis_client:
                     # Store latest candle
-                    self.redis_client.hmset(f"stock:{ticker}:latest_candle", {
-                        "open": latest_open,
-                        "high": latest_high,
-                        "low": latest_low,
-                        "close": latest_close,
-                        "volume": latest_volume,
-                        "timestamp": latest_timestamp
-                    })
+                    self.redis_client.hmset(
+                        f"stock:{ticker}:latest_candle",
+                        {
+                            "open": latest_open,
+                            "high": latest_high,
+                            "low": latest_low,
+                            "close": latest_close,
+                            "volume": latest_volume,
+                            "timestamp": latest_timestamp,
+                        },
+                    )
 
                     # Store in candles hash
                     timespan = "minute" if latest_agg.get(
-                        'ev') == 'AM' else "second"
+                        "ev") == "AM" else "second"
                     candle_key = f"stock:{ticker}:candles:{timespan}"
 
                     # Add each candle to the hash
                     for agg in ticker_aggs:
-                        timestamp = agg.get('s', 0)
+                        timestamp = agg.get("s", 0)
                         candle_data = {
-                            "open": agg.get('o', 0),
-                            "high": agg.get('h', 0),
-                            "low": agg.get('l', 0),
-                            "close": agg.get('c', 0),
-                            "volume": agg.get('v', 0),
-                            "timestamp": timestamp
+                            "open": agg.get("o", 0),
+                            "high": agg.get("h", 0),
+                            "low": agg.get("l", 0),
+                            "close": agg.get("c", 0),
+                            "volume": agg.get("v", 0),
+                            "timestamp": timestamp,
                         }
                         self.redis_client.hset(
-                            candle_key, timestamp, json.dumps(candle_data))
+                            candle_key,
+                            timestamp,
+                            json.dumps(candle_data),
+                        )
 
                     # Publish update to subscribers
-                    self.redis_client.publish(f"candle_update:{ticker}", json.dumps({
-                        "type": "candle",
-                        "ticker": ticker,
-                        "timespan": timespan,
-                        "open": latest_open,
-                        "high": latest_high,
-                        "low": latest_low,
-                        "close": latest_close,
-                        "volume": latest_volume,
-                        "timestamp": latest_timestamp
-                    }))
+                    self.redis_client.publish(
+                        f"candle_update:{ticker}",
+                        json.dumps(
+                            {
+                                "type": "candle",
+                                "ticker": ticker,
+                                "timespan": timespan,
+                                "open": latest_open,
+                                "high": latest_high,
+                                "low": latest_low,
+                                "close": latest_close,
+                                "volume": latest_volume,
+                                "timestamp": latest_timestamp,
+                            },
+                        ),
+                    )
 
         except Exception as e:
-            logger.error(f"Error processing aggregate batch: {e}")
+            logger.exception(f"Error processing aggregate batch: {e}")
 
-    def start(self):
+    def start(self) -> None:
         """Start the WebSocket client in a background thread"""
         if self.running:
             logger.warning("WebSocket client is already running")
@@ -2124,7 +2662,7 @@ class PolygonWebSocketClient:
 
         self.running = True
 
-        def run_event_loop():
+        def run_event_loop() -> None:
             """Run the event loop in a background thread"""
             try:
                 # Create new event loop for this thread
@@ -2137,13 +2675,12 @@ class PolygonWebSocketClient:
                     self._heartbeat())
 
                 # Run the event loop
-                self.event_loop.run_until_complete(asyncio.gather(
-                    self.main_task,
-                    self.heartbeat_task
-                ))
+                self.event_loop.run_until_complete(
+                    asyncio.gather(self.main_task, self.heartbeat_task),
+                )
 
             except Exception as e:
-                logger.error(f"Error in WebSocket thread: {e}")
+                logger.exception(f"Error in WebSocket thread: {e}")
 
             finally:
                 # Clean up
@@ -2167,7 +2704,7 @@ class PolygonWebSocketClient:
         """
         return self.connected
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the WebSocket client"""
         if not self.running:
             logger.warning("WebSocket client is not running, nothing to stop")
@@ -2183,14 +2720,16 @@ class PolygonWebSocketClient:
             try:
                 # Create a future and wait for it to complete
                 future = asyncio.run_coroutine_threadsafe(
-                    self._cancel_tasks(), self.event_loop)
+                    self._cancel_tasks(),
+                    self.event_loop,
+                )
                 # Wait for the future to complete with a timeout
                 future.result(timeout=5)
                 logger.info("WebSocket tasks cancelled successfully")
             except asyncio.TimeoutError:
                 logger.warning("Timeout waiting for WebSocket tasks to cancel")
             except Exception as e:
-                logger.error(f"Error cancelling WebSocket tasks: {e}")
+                logger.exception(f"Error cancelling WebSocket tasks: {e}")
             else:
                 logger.info("WebSocket tasks cancelled successfully")
         else:
@@ -2212,19 +2751,22 @@ class PolygonWebSocketClient:
         with self.buffer_lock:
             if self.trade_buffer:
                 logger.info(
-                    f"Processing {len(self.trade_buffer)} remaining trade messages")
+                    f"Processing {len(self.trade_buffer)} remaining trade messages",
+                )
                 self._process_trade_batch(self.trade_buffer)
                 self.trade_buffer = []
 
             if self.quote_buffer:
                 logger.info(
-                    f"Processing {len(self.quote_buffer)} remaining quote messages")
+                    f"Processing {len(self.quote_buffer)} remaining quote messages",
+                )
                 self._process_quote_batch(self.quote_buffer)
                 self.quote_buffer = []
 
             if self.agg_buffer:
                 logger.info(
-                    f"Processing {len(self.agg_buffer)} remaining aggregate messages")
+                    f"Processing {len(self.agg_buffer)} remaining aggregate messages",
+                )
                 self._process_agg_batch(self.agg_buffer)
                 self.agg_buffer = []
 
@@ -2237,7 +2779,7 @@ class PolygonWebSocketClient:
 
         logger.info("WebSocket client stopped")
 
-    async def _cancel_tasks(self):
+    async def _cancel_tasks(self) -> None:
         """Cancel all tasks"""
         logger.info("Starting to cancel tasks in WebSocket client")
 
@@ -2250,7 +2792,7 @@ class PolygonWebSocketClient:
                 self.main_task.cancel()
                 tasks_to_wait.append(self.main_task)
             except Exception as e:
-                logger.error(f"Error cancelling main task: {e}")
+                logger.exception(f"Error cancelling main task: {e}")
 
         if self.heartbeat_task:
             logger.info("Cancelling heartbeat task")
@@ -2258,13 +2800,14 @@ class PolygonWebSocketClient:
                 self.heartbeat_task.cancel()
                 tasks_to_wait.append(self.heartbeat_task)
             except Exception as e:
-                logger.error(f"Error cancelling heartbeat task: {e}")
+                logger.exception(f"Error cancelling heartbeat task: {e}")
 
         # Wait for tasks to be cancelled with a timeout
         if tasks_to_wait:
             try:
                 logger.info(
-                    f"Waiting for {len(tasks_to_wait)} tasks to be cancelled (with 2s timeout)")
+                    f"Waiting for {len(tasks_to_wait)} tasks to be cancelled (with 2s timeout)"
+                )
                 # Wait for tasks to be cancelled with a timeout
                 done, pending = await asyncio.wait(tasks_to_wait, timeout=2.0)
                 if pending:
@@ -2273,7 +2816,8 @@ class PolygonWebSocketClient:
                 else:
                     logger.info("All tasks cancelled successfully")
             except Exception as e:
-                logger.error(f"Error waiting for tasks to be cancelled: {e}")
+                logger.exception(
+                    f"Error waiting for tasks to be cancelled: {e}")
 
         if self.ws:
             logger.info("Closing WebSocket connection")
@@ -2285,14 +2829,14 @@ class PolygonWebSocketClient:
                 logger.warning(
                     "Timeout waiting for WebSocket connection to close")
             except Exception as e:
-                logger.error(f"Error closing WebSocket connection: {e}")
+                logger.exception(f"Error closing WebSocket connection: {e}")
         else:
             logger.info("No WebSocket connection to close")
 
         self.connected = False
         logger.info("All tasks canceled and connections closed")
 
-    def subscribe(self, channels):
+    def subscribe(self, channels) -> None:
         """
         Subscribe to WebSocket channels
 
@@ -2317,23 +2861,24 @@ class PolygonWebSocketClient:
         if self.connected and self.event_loop and not self.event_loop.is_closed():
             subscribe_message = {
                 "action": "subscribe",
-                "params": ",".join(new_channels)
+                "params": ",".join(new_channels),
             }
 
-            async def send_subscribe():
+            async def send_subscribe() -> None:
                 try:
                     await self.ws.send(json.dumps(subscribe_message))
                     logger.info(
                         f"Subscribed to channels: {', '.join(new_channels)}")
                 except Exception as e:
-                    logger.error(f"Error subscribing to channels: {e}")
+                    logger.exception(f"Error subscribing to channels: {e}")
 
             asyncio.run_coroutine_threadsafe(send_subscribe(), self.event_loop)
         else:
             logger.info(
-                f"Added channels to subscription list (will subscribe when connected): {', '.join(new_channels)}")
+                f"Added channels to subscription list (will subscribe when connected): {', '.join(new_channels)}",
+            )
 
-    def unsubscribe(self, channels):
+    def unsubscribe(self, channels) -> None:
         """
         Unsubscribe from WebSocket channels
 
@@ -2358,24 +2903,26 @@ class PolygonWebSocketClient:
         if self.connected and self.event_loop and not self.event_loop.is_closed():
             unsubscribe_message = {
                 "action": "unsubscribe",
-                "params": ",".join(removed_channels)
+                "params": ",".join(removed_channels),
             }
 
-            async def send_unsubscribe():
+            async def send_unsubscribe() -> None:
                 try:
                     await self.ws.send(json.dumps(unsubscribe_message))
                     logger.info(
-                        f"Unsubscribed from channels: {', '.join(removed_channels)}")
+                        f"Unsubscribed from channels: {', '.join(removed_channels)}",
+                    )
                 except Exception as e:
-                    logger.error(f"Error unsubscribing from channels: {e}")
+                    logger.exception(f"Error unsubscribing from channels: {e}")
 
             asyncio.run_coroutine_threadsafe(
                 send_unsubscribe(), self.event_loop)
         else:
             logger.info(
-                f"Removed channels from subscription list: {', '.join(removed_channels)}")
+                f"Removed channels from subscription list: {', '.join(removed_channels)}"
+            )
 
-    def add_message_handler(self, event_type, handler):
+    def add_message_handler(self, event_type, handler) -> None:
         """
         Add a message handler for a specific event type
 
@@ -2389,7 +2936,7 @@ class PolygonWebSocketClient:
         self.message_handlers[event_type].append(handler)
         logger.info(f"Added message handler for event type: {event_type}")
 
-    def remove_message_handler(self, event_type, handler):
+    def remove_message_handler(self, event_type, handler) -> None:
         """
         Remove a message handler for a specific event type
 
@@ -2409,7 +2956,8 @@ class PolygonWebSocketClient:
 
 # Helper functions for common subscriptions
 
-def subscribe_to_trades(client, tickers):
+
+def subscribe_to_trades(client, tickers) -> None:
     """
     Subscribe to trade events for specific tickers
 
@@ -2424,7 +2972,7 @@ def subscribe_to_trades(client, tickers):
     client.subscribe(channels)
 
 
-def subscribe_to_quotes(client, tickers):
+def subscribe_to_quotes(client, tickers) -> None:
     """
     Subscribe to quote events for specific tickers
 
@@ -2439,7 +2987,7 @@ def subscribe_to_quotes(client, tickers):
     client.subscribe(channels)
 
 
-def subscribe_to_minute_aggs(client, tickers):
+def subscribe_to_minute_aggs(client, tickers) -> None:
     """
     Subscribe to minute aggregates for specific tickers
 
@@ -2454,7 +3002,7 @@ def subscribe_to_minute_aggs(client, tickers):
     client.subscribe(channels)
 
 
-def subscribe_to_second_aggs(client, tickers):
+def subscribe_to_second_aggs(client, tickers) -> None:
     """
     Subscribe to second aggregates for specific tickers
 
@@ -2473,11 +3021,19 @@ def subscribe_to_second_aggs(client, tickers):
 # UNUSUAL WHALES API CLIENT #
 ##############################
 
+
 class UnusualWhalesClient:
     """GPU-Optimized client for the Unusual Whales API"""
 
-    def __init__(self, api_key=UNUSUAL_WHALES_API_KEY, redis_client=None, use_gpu=USE_GPU,
-                 max_pool_size=MAX_POOL_SIZE, max_retries=MAX_RETRIES, cache_ttl=UNUSUAL_WHALES_CACHE_TTL):
+    def __init__(
+        self,
+        api_key=UNUSUAL_WHALES_API_KEY,
+        redis_client=None,
+        use_gpu=USE_GPU,
+        max_pool_size=MAX_POOL_SIZE,
+        max_retries=MAX_RETRIES,
+        cache_ttl=UNUSUAL_WHALES_CACHE_TTL,
+    ) -> None:
         """
         Initialize GPU-Optimized Unusual Whales API client
 
@@ -2497,10 +3053,12 @@ class UnusualWhalesClient:
         # Verify API key is provided
         if not self.api_key:
             logger.warning(
-                "No API key provided. Set the UNUSUAL_WHALES_API_KEY environment variable.")
+                "No API key provided. Set the UNUSUAL_WHALES_API_KEY environment variable."
+            )
         else:
             logger.info(
-                f"Initialized Unusual Whales API client with API key: {self.api_key[:4]}****{self.api_key[-4:] if len(self.api_key) > 8 else ''}")
+                f"Initialized Unusual Whales API client with API key: {self.api_key[:4]}****{self.api_key[-4:] if len(self.api_key) > 8 else ''}",
+            )
 
         # Initialize base URL
         self.base_url = "https://api.unusualwhales.com/api"
@@ -2510,7 +3068,9 @@ class UnusualWhalesClient:
 
         # Initialize connection pool
         self.connection_pool = AsyncConnectionPool(
-            max_pool_size=max_pool_size, max_retries=max_retries)
+            max_pool_size=max_pool_size,
+            max_retries=max_retries,
+        )
 
         # Initialize thread pool for parallel processing
         self.thread_pool = ThreadPoolExecutor(max_workers=os.cpu_count())
@@ -2529,7 +3089,21 @@ class UnusualWhalesClient:
         self.scheduled_tasks = {}
         self.event_loop = None
 
-    def _handle_signal(self, signum, frame):
+        # Send initialization notification to frontend
+        if self.redis_client:
+            self._send_frontend_notification(
+                message="Polygon REST API client initialized",
+                level="info",
+                category="system_startup",
+                details={
+                    "gpu_acceleration": "enabled" if self.use_gpu else "disabled",
+                    "cache_ttl": self.cache_ttl,
+                    "max_retries": max_retries,
+                    "timestamp": time.time()
+                }
+            )
+
+    def _handle_signal(self, signum, frame) -> None:
         """Handle signals for graceful shutdown"""
         logger.info(f"Received signal {signum}, shutting down gracefully")
         self.running = False
@@ -2541,7 +3115,48 @@ class UnusualWhalesClient:
         except RuntimeError:
             # No running event loop, schedule close for later
             logger.warning(
-                "No running event loop available, resources will be closed later")
+                "No running event loop available, resources will be closed later",
+            )
+
+    def _send_frontend_notification(self, message, level="info", category="unusual_whales", details=None):
+        """
+        Send notification to frontend via Redis
+
+        Args:
+            message: Notification message
+            level: Notification level (info, success, warning, error)
+            category: Notification category
+            details: Additional details as dictionary
+        """
+        if not self.redis_client:
+            return
+
+        try:
+            notification = {
+                "timestamp": time.time(),
+                "message": message,
+                "level": level,
+                "category": category,
+                "source": "unusual_whales_api",
+                "details": details or {}
+            }
+
+            # Add to notifications list
+            self.redis_client.lpush(
+                "frontend:notifications", json.dumps(notification))
+
+            # Trim list to prevent unbounded growth
+            self.redis_client.ltrim("frontend:notifications", 0, 999)
+
+            # Publish event for real-time updates
+            self.redis_client.publish("frontend:events", json.dumps({
+                "type": "notification",
+                "data": notification
+            }))
+
+            logger.debug(f"Sent frontend notification: {message}")
+        except Exception as e:
+            logger.error(f"Error sending frontend notification: {e}")
 
     async def _make_request(self, endpoint, params=None):
         """
@@ -2575,10 +3190,10 @@ class UnusualWhalesClient:
             # Update Prometheus metrics if available
             if PROMETHEUS_AVAILABLE:
                 API_ERROR_COUNT.labels(
-                    client='unusual_whales',
+                    client="unusual_whales",
                     endpoint=endpoint,
-                    method='GET',
-                    error_type='missing_api_key'
+                    method="GET",
+                    error_type="missing_api_key",
                 ).inc()
             return {"status": "ERROR", "error": "API key not provided"}
 
@@ -2593,9 +3208,9 @@ class UnusualWhalesClient:
             # Update Prometheus metrics if available
             if PROMETHEUS_AVAILABLE:
                 API_REQUEST_COUNT.labels(
-                    client='unusual_whales',
+                    client="unusual_whales",
                     endpoint=endpoint,
-                    method='GET'
+                    method="GET",
                 ).inc()
 
             data = await self.connection_pool.get(url, params=params, headers=headers)
@@ -2606,9 +3221,9 @@ class UnusualWhalesClient:
             # Update latency metrics
             if PROMETHEUS_AVAILABLE:
                 API_REQUEST_LATENCY.labels(
-                    client='unusual_whales',
+                    client="unusual_whales",
                     endpoint=endpoint,
-                    method='GET'
+                    method="GET",
                 ).observe(latency)
 
             # Cache successful responses
@@ -2618,13 +3233,14 @@ class UnusualWhalesClient:
                 # Update error metrics
                 if PROMETHEUS_AVAILABLE:
                     API_ERROR_COUNT.labels(
-                        client='unusual_whales',
+                        client="unusual_whales",
                         endpoint=endpoint,
-                        method='GET',
-                        error_type='api_error'
+                        method="GET",
+                        error_type="api_error",
                     ).inc()
                 logger.error(
-                    f"API error for {endpoint}: {data.get('error', 'Unknown error')}")
+                    f"API error for {endpoint}: {data.get('error', 'Unknown error')}",
+                )
 
             return data
         except Exception as e:
@@ -2634,20 +3250,24 @@ class UnusualWhalesClient:
             # Update error metrics
             if PROMETHEUS_AVAILABLE:
                 API_ERROR_COUNT.labels(
-                    client='unusual_whales',
+                    client="unusual_whales",
                     endpoint=endpoint,
-                    method='GET',
-                    error_type=type(e).__name__
+                    method="GET",
+                    error_type=type(e).__name__,
                 ).inc()
                 API_REQUEST_LATENCY.labels(
-                    client='unusual_whales',
+                    client="unusual_whales",
                     endpoint=endpoint,
-                    method='GET'
+                    method="GET",
                 ).observe(latency)
 
-            logger.error(
-                f"Unexpected error during API request: {type(e).__name__}: {e}")
-            return {"status": "ERROR", "error": f"Unexpected error: {type(e).__name__}: {e}"}
+            logger.exception(
+                f"Unexpected error during API request: {type(e).__name__}: {e}",
+            )
+            return {
+                "status": "ERROR",
+                "error": f"Unexpected error: {type(e).__name__}: {e}",
+            }
 
     async def check_api_health(self):
         """Check the health of the Unusual Whales API"""
@@ -2658,20 +3278,25 @@ class UnusualWhalesClient:
             if data and "status" in data:
                 logger.info(f"API health check result: {data['status']}")
                 return data["status"] == "OK"
-            elif data and isinstance(data, dict):
+            if data and isinstance(data, dict):
                 # Some APIs return a 200 status code with a different structure
                 logger.info(f"API health check returned data: {data}")
                 return True
-            else:
-                # If we get any response at all, consider the API healthy
-                logger.warning(
-                    f"API health check returned unexpected format: {data}")
-                return True
+            # If we get any response at all, consider the API healthy
+            logger.warning(
+                f"API health check returned unexpected format: {data}")
+            return True
         except Exception as e:
-            logger.error(f"Error checking API health: {e}")
+            logger.exception(f"Error checking API health: {e}")
             return False
 
-    async def get_flow_alerts(self, ticker, is_ask_side=True, is_bid_side=True, limit=100):
+    async def get_flow_alerts(
+        self,
+        ticker,
+        is_ask_side=True,
+        is_bid_side=True,
+        limit=100,
+    ):
         """
         Get flow alerts for a specific ticker
 
@@ -2689,13 +3314,13 @@ class UnusualWhalesClient:
             params = {
                 "is_ask_side": str(is_ask_side).lower(),
                 "is_bid_side": str(is_bid_side).lower(),
-                "limit": min(limit, 200)
+                "limit": min(limit, 200),
             }
 
             data = await self._make_request(endpoint, params)
 
             if data and "data" in data:
-                alert_count = len(data['data'])
+                alert_count = len(data["data"])
                 logger.info(
                     f"Flow alerts retrieved for {ticker}: {alert_count} items")
 
@@ -2717,19 +3342,24 @@ class UnusualWhalesClient:
                         if created_at:
                             try:
                                 dt = datetime.fromisoformat(
-                                    created_at.replace("Z", "+00:00"))
+                                    created_at.replace("Z", "+00:00"),
+                                )
                                 score = dt.timestamp()
                             except ValueError:
                                 score = time.time()
                         else:
                             score = time.time()
 
-                        pipeline.zadd(f"unusual_whales:flow:{ticker}", {
-                                      json.dumps(alert): score})
+                        pipeline.zadd(
+                            f"unusual_whales:flow:{ticker}",
+                            {json.dumps(alert): score},
+                        )
 
                     # Store last update timestamp
                     pipeline.set(
-                        f"unusual_whales:flow:{ticker}:last_update", datetime.now().isoformat())
+                        f"unusual_whales:flow:{ticker}:last_update",
+                        datetime.now().isoformat(),
+                    )
 
                     # Execute pipeline
                     pipeline.execute()
@@ -2737,20 +3367,69 @@ class UnusualWhalesClient:
                 # Process with GPU if available
                 if self.use_gpu and self.gpu_accelerator.gpu_initialized:
                     self.thread_pool.submit(
-                        self._process_flow_alerts_gpu, ticker, data["data"])
+                        self._process_flow_alerts_gpu,
+                        ticker,
+                        data["data"],
+                    )
+
+                # Send notification to frontend
+                if self.redis_client:
+                    self._send_frontend_notification(
+                        message=f"Retrieved {alert_count} flow alerts for {ticker}",
+                        level="success",
+                        category="unusual_whales_data",
+                        details={
+                            "ticker": ticker,
+                            "alert_count": alert_count,
+                            "is_ask_side": is_ask_side,
+                            "is_bid_side": is_bid_side,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    )
 
                 return data["data"]
-            else:
-                error_msg = data.get("error", "Unknown error") if isinstance(
-                    data, dict) else "Unknown error"
-                logger.warning(
-                    f"Failed to get flow alerts for {ticker}: {error_msg}")
-                return []  # Return empty list on error
+            error_msg = (
+                data.get("error", "Unknown error")
+                if isinstance(data, dict)
+                else "Unknown error"
+            )
+            logger.warning(
+                f"Failed to get flow alerts for {ticker}: {error_msg}")
+
+            # Send error notification to frontend
+            if self.redis_client:
+                self._send_frontend_notification(
+                    message=f"Failed to get flow alerts for {ticker}",
+                    level="error",
+                    category="unusual_whales_data",
+                    details={
+                        "ticker": ticker,
+                        "error": error_msg,
+                        "is_ask_side": is_ask_side,
+                        "is_bid_side": is_bid_side
+                    }
+                )
+
+            return []  # Return empty list on error
         except Exception as e:
-            logger.error(f"Error getting flow alerts for {ticker}: {e}")
+            logger.exception(f"Error getting flow alerts for {ticker}: {e}")
+
+            # Send error notification to frontend
+            if self.redis_client:
+                self._send_frontend_notification(
+                    message=f"Error getting flow alerts for {ticker}",
+                    level="error",
+                    category="unusual_whales_data",
+                    details={
+                        "ticker": ticker,
+                        "error_type": type(e).__name__,
+                        "error": str(e)
+                    }
+                )
+
             return []
 
-    def _process_flow_alerts_gpu(self, ticker, alerts):
+    def _process_flow_alerts_gpu(self, ticker, alerts) -> None:
         """Process flow alerts with GPU acceleration"""
         if not alerts:
             return
@@ -2798,24 +3477,34 @@ class UnusualWhalesClient:
 
             # Store statistics in Redis if available
             if self.redis_client:
-                self.redis_client.hmset(f"unusual_whales:flow_stats:{ticker}", {
-                    "total_premium": total_premium,
-                    "total_volume": total_volume,
-                    "avg_premium": avg_premium,
-                    "avg_volume": avg_volume,
-                    "avg_strike": avg_strike,
-                    "call_count": call_count,
-                    "put_count": put_count,
-                    "alert_count": len(alerts),
-                    "last_update": datetime.now().isoformat()
-                })
+                self.redis_client.hmset(
+                    f"unusual_whales:flow_stats:{ticker}",
+                    {
+                        "total_premium": total_premium,
+                        "total_volume": total_volume,
+                        "avg_premium": avg_premium,
+                        "avg_volume": avg_volume,
+                        "avg_strike": avg_strike,
+                        "call_count": call_count,
+                        "put_count": put_count,
+                        "alert_count": len(alerts),
+                        "last_update": datetime.now().isoformat(),
+                    },
+                )
 
         except Exception as e:
-            logger.error(
+            logger.exception(
                 f"Error processing flow alerts for {ticker} on GPU: {e}")
 
-    async def get_alerts(self, config_ids=None, intraday_only=True, limit=100,
-                         noti_types=None, page=0, ticker_symbols=None):
+    async def get_alerts(
+        self,
+        config_ids=None,
+        intraday_only=True,
+        limit=100,
+        noti_types=None,
+        page=0,
+        ticker_symbols=None,
+    ):
         """
         Get all alerts that have been triggered for the user
 
@@ -2837,7 +3526,7 @@ class UnusualWhalesClient:
                 "ticker_symbols": ticker_symbols if ticker_symbols is not None else "",
                 "intraday_only": str(intraday_only).lower(),
                 "limit": min(limit, 200),
-                "page": max(page, 0)
+                "page": max(page, 0),
             }
 
             if config_ids:
@@ -2855,10 +3544,11 @@ class UnusualWhalesClient:
             data = await self._make_request(endpoint, params)
 
             if data and "data" in data:
-                alert_count = len(data['data'])
+                alert_count = len(data["data"])
                 logger.info(f"Alerts retrieved: {alert_count} items")
                 logger.info(
-                    f"Alert types: {set(alert.get('type', 'unknown') for alert in data['data'])}")
+                    f"Alert types: { {alert.get('type', 'unknown') for alert in data['data']} }"
+                )
 
                 # Store in Redis if available
                 if self.redis_client:
@@ -2876,32 +3566,38 @@ class UnusualWhalesClient:
                         if tape_time:
                             try:
                                 dt = datetime.fromisoformat(
-                                    tape_time.replace("Z", "+00:00"))
+                                    tape_time.replace("Z", "+00:00"),
+                                )
                                 score = dt.timestamp()
                             except ValueError:
                                 score = time.time()
                         else:
                             score = time.time()
 
-                        pipeline.zadd("unusual_whales:alerts", {
-                                      json.dumps(alert): score})
+                        pipeline.zadd(
+                            "unusual_whales:alerts",
+                            {json.dumps(alert): score},
+                        )
 
                     # Store last update timestamp
-                    pipeline.set("unusual_whales:alerts:last_update",
-                                 datetime.now().isoformat())
+                    pipeline.set(
+                        "unusual_whales:alerts:last_update",
+                        datetime.now().isoformat(),
+                    )
 
                     # Execute pipeline
                     pipeline.execute()
 
                 return data["data"]
-            else:
-                error_msg = data.get("error", "Unknown error") if isinstance(
-                    data, dict) else "Unknown error"
-                logger.warning(
-                    f"Failed to get Unusual Whales alerts: {error_msg}")
-                return []
+            error_msg = (
+                data.get("error", "Unknown error")
+                if isinstance(data, dict)
+                else "Unknown error"
+            )
+            logger.warning(f"Failed to get Unusual Whales alerts: {error_msg}")
+            return []
         except Exception as e:
-            logger.error(f"Error getting alerts: {e}")
+            logger.exception(f"Error getting alerts: {e}")
             return []
 
     async def get_alert_configurations(self):
@@ -2918,7 +3614,8 @@ class UnusualWhalesClient:
 
             if data and "data" in data:
                 logger.info(
-                    f"Alert configurations retrieved: {len(data['data'])} items")
+                    f"Alert configurations retrieved: {len(data['data'])} items",
+                )
 
                 # Store in Redis if available
                 if self.redis_client:
@@ -2933,29 +3630,43 @@ class UnusualWhalesClient:
                         config_id = config.get("id", "")
                         if config_id:
                             pipeline.hset(
-                                "unusual_whales:alert_configs", config_id, json.dumps(config))
+                                "unusual_whales:alert_configs",
+                                config_id,
+                                json.dumps(config),
+                            )
 
                     # Store last update timestamp
                     pipeline.set(
-                        "unusual_whales:alert_configs:last_update", datetime.now().isoformat())
+                        "unusual_whales:alert_configs:last_update",
+                        datetime.now().isoformat(),
+                    )
 
                     # Execute pipeline
                     pipeline.execute()
 
                 return data["data"]
-            else:
-                error_msg = data.get("error", "Unknown error") if isinstance(
-                    data, dict) else "Unknown error"
-                logger.warning(
-                    f"Failed to get alert configurations: {error_msg}")
-                return []
+            error_msg = (
+                data.get("error", "Unknown error")
+                if isinstance(data, dict)
+                else "Unknown error"
+            )
+            logger.warning(f"Failed to get alert configurations: {error_msg}")
+            return []
         except Exception as e:
-            logger.error(f"Error getting alert configurations: {e}")
+            logger.exception(f"Error getting alert configurations: {e}")
             return []
 
-    async def get_recent_dark_pool_trades(self, date=None, limit=100, max_premium=None,
-                                          max_size=None, max_volume=None, min_premium=0,
-                                          min_size=0, min_volume=0):
+    async def get_recent_dark_pool_trades(
+        self,
+        date=None,
+        limit=100,
+        max_premium=None,
+        max_size=None,
+        max_volume=None,
+        min_premium=0,
+        min_size=0,
+        min_volume=0,
+    ):
         """
         Get the latest darkpool trades
 
@@ -2978,7 +3689,7 @@ class UnusualWhalesClient:
                 "limit": min(limit, 200),
                 "min_premium": min_premium,
                 "min_size": min_size,
-                "min_volume": min_volume
+                "min_volume": min_volume,
             }
 
             if date:
@@ -2997,7 +3708,8 @@ class UnusualWhalesClient:
 
             if data and "data" in data:
                 logger.info(
-                    f"Recent dark pool trades retrieved: {len(data['data'])} items")
+                    f"Recent dark pool trades retrieved: {len(data['data'])} items",
+                )
 
                 # Store in Redis if available
                 if self.redis_client:
@@ -3014,19 +3726,24 @@ class UnusualWhalesClient:
                         if executed_at:
                             try:
                                 dt = datetime.fromisoformat(
-                                    executed_at.replace("Z", "+00:00"))
+                                    executed_at.replace("Z", "+00:00"),
+                                )
                                 score = dt.timestamp()
                             except ValueError:
                                 score = time.time()
                         else:
                             score = time.time()
 
-                        pipeline.zadd("unusual_whales:darkpool:recent", {
-                                      json.dumps(trade): score})
+                        pipeline.zadd(
+                            "unusual_whales:darkpool:recent",
+                            {json.dumps(trade): score},
+                        )
 
                     # Store last update timestamp
                     pipeline.set(
-                        "unusual_whales:darkpool:recent:last_update", datetime.now().isoformat())
+                        "unusual_whales:darkpool:recent:last_update",
+                        datetime.now().isoformat(),
+                    )
 
                     # Execute pipeline
                     pipeline.execute()
@@ -3034,20 +3751,72 @@ class UnusualWhalesClient:
                 # Process with GPU if available
                 if self.use_gpu and self.gpu_accelerator.gpu_initialized:
                     self.thread_pool.submit(
-                        self._process_dark_pool_trades_gpu, data["data"])
+                        self._process_dark_pool_trades_gpu,
+                        data["data"],
+                    )
+
+                # Send notification to frontend
+                if self.redis_client:
+                    trade_count = len(data["data"])
+                    tickers = list(set(trade.get("ticker", "")
+                                   for trade in data["data"] if trade.get("ticker")))
+                    self._send_frontend_notification(
+                        message=f"Retrieved {trade_count} recent dark pool trades",
+                        level="success",
+                        category="unusual_whales_data",
+                        details={
+                            "trade_count": trade_count,
+                            "tickers": tickers[:10] + (["..."] if len(tickers) > 10 else []),
+                            "min_premium": min_premium,
+                            "min_size": min_size,
+                            "min_volume": min_volume,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    )
 
                 return data["data"]
-            else:
-                error_msg = data.get("error", "Unknown error") if isinstance(
-                    data, dict) else "Unknown error"
-                logger.warning(
-                    f"Failed to get recent dark pool trades: {error_msg}")
-                return []
+            error_msg = (
+                data.get("error", "Unknown error")
+                if isinstance(data, dict)
+                else "Unknown error"
+            )
+            logger.warning(
+                f"Failed to get recent dark pool trades: {error_msg}")
+
+            # Send error notification to frontend
+            if self.redis_client:
+                self._send_frontend_notification(
+                    message="Failed to get recent dark pool trades",
+                    level="error",
+                    category="unusual_whales_data",
+                    details={
+                        "error": error_msg,
+                        "min_premium": min_premium,
+                        "min_size": min_size,
+                        "min_volume": min_volume,
+                        "date": date
+                    }
+                )
+
+            return []
         except Exception as e:
-            logger.error(f"Error getting recent dark pool trades: {e}")
+            logger.exception(f"Error getting recent dark pool trades: {e}")
+
+            # Send error notification to frontend
+            if self.redis_client:
+                self._send_frontend_notification(
+                    message="Error getting recent dark pool trades",
+                    level="error",
+                    category="unusual_whales_data",
+                    details={
+                        "error_type": type(e).__name__,
+                        "error": str(e)
+                    }
+                )
+
             return []
 
-    def _process_dark_pool_trades_gpu(self, trades):
+    def _process_dark_pool_trades_gpu(self, trades) -> None:
         """Process dark pool trades with GPU acceleration"""
         if not trades:
             return
@@ -3075,7 +3844,11 @@ class UnusualWhalesClient:
                           for trade in ticker_trades]
 
                 # Use GPU for calculations
-                if self.use_gpu and self.gpu_accelerator.gpu_initialized and CUPY_AVAILABLE:
+                if (
+                    self.use_gpu
+                    and self.gpu_accelerator.gpu_initialized
+                    and CUPY_AVAILABLE
+                ):
                     # Convert to CuPy arrays
                     cp_premiums = cp.array(premiums, dtype=cp.float32)
                     cp_sizes = cp.array(sizes, dtype=cp.float32)
@@ -3117,36 +3890,78 @@ class UnusualWhalesClient:
 
                 # Store statistics in Redis if available
                 if self.redis_client:
-                    self.redis_client.hmset(f"unusual_whales:darkpool_stats:{ticker}", {
-                        "total_premium": total_premium,
-                        "total_size": total_size,
-                        "avg_premium": avg_premium,
-                        "avg_size": avg_size,
-                        "avg_price": avg_price,
-                        "trade_count": len(ticker_trades),
-                        "last_update": datetime.now().isoformat()
-                    })
+                    self.redis_client.hmset(
+                        f"unusual_whales:darkpool_stats:{ticker}",
+                        {
+                            "total_premium": total_premium,
+                            "total_size": total_size,
+                            "avg_premium": avg_premium,
+                            "avg_size": avg_size,
+                            "avg_price": avg_price,
+                            "trade_count": len(ticker_trades),
+                            "last_update": datetime.now().isoformat(),
+                        },
+                    )
 
             # Record GPU processing time
             gpu_processing_time = time.time() - gpu_start_time
             if PROMETHEUS_AVAILABLE:
-                GPU_PROCESSING_TIME.labels(
-                    operation='darkpool_processing').observe(gpu_processing_time)
+                GPU_PROCESSING_TIME.labels(operation="darkpool_processing").observe(
+                    gpu_processing_time,
+                )
+
+            # Send notification to frontend about successful GPU processing
+            if self.redis_client and random.random() < 0.1:  # Only send 10% of the time to avoid flooding
+                self._send_frontend_notification(
+                    message="GPU-accelerated dark pool trade processing completed",
+                    level="info",
+                    category="gpu_processing",
+                    details={
+                        "ticker_count": len(trades_by_ticker),
+                        "tickers": list(trades_by_ticker.keys())[:5] + (["..."] if len(trades_by_ticker) > 5 else []),
+                        "processing_time": gpu_processing_time,
+                        "trade_count": len(trades)
+                    }
+                )
 
         except Exception as e:
-            logger.error(f"Error processing dark pool trades on GPU: {e}")
+            logger.exception(f"Error processing dark pool trades on GPU: {e}")
             # Update error metrics
             if PROMETHEUS_AVAILABLE:
                 API_ERROR_COUNT.labels(
-                    client='unusual_whales',
-                    endpoint='darkpool',
-                    method='gpu_processing',
-                    error_type=type(e).__name__
+                    client="unusual_whales",
+                    endpoint="darkpool",
+                    method="gpu_processing",
+                    error_type=type(e).__name__,
                 ).inc()
 
-    async def get_dark_pool_trades(self, ticker, date=None, limit=500, max_premium=None,
-                                   max_size=None, max_volume=None, min_premium=0,
-                                   min_size=0, min_volume=0, newer_than=None, older_than=None):
+            # Send error notification to frontend
+            if self.redis_client:
+                self._send_frontend_notification(
+                    message="Error processing dark pool trades on GPU",
+                    level="error",
+                    category="gpu_processing",
+                    details={
+                        "error_type": type(e).__name__,
+                        "error": str(e),
+                        "trade_count": len(trades) if trades else 0
+                    }
+                )
+
+    async def get_dark_pool_trades(
+        self,
+        ticker,
+        date=None,
+        limit=500,
+        max_premium=None,
+        max_size=None,
+        max_volume=None,
+        min_premium=0,
+        min_size=0,
+        min_volume=0,
+        newer_than=None,
+        older_than=None,
+    ):
         """
         Get the darkpool trades for the given ticker on a given day
 
@@ -3172,7 +3987,7 @@ class UnusualWhalesClient:
                 "limit": min(limit, 500),
                 "min_premium": min_premium,
                 "min_size": min_size,
-                "min_volume": min_volume
+                "min_volume": min_volume,
             }
 
             if date:
@@ -3197,7 +4012,8 @@ class UnusualWhalesClient:
 
             if data and "data" in data:
                 logger.info(
-                    f"Dark pool trades retrieved for {ticker}: {len(data['data'])} items")
+                    f"Dark pool trades retrieved for {ticker}: {len(data['data'])} items"
+                )
 
                 # Store in Redis if available
                 if self.redis_client:
@@ -3214,19 +4030,24 @@ class UnusualWhalesClient:
                         if executed_at:
                             try:
                                 dt = datetime.fromisoformat(
-                                    executed_at.replace("Z", "+00:00"))
+                                    executed_at.replace("Z", "+00:00"),
+                                )
                                 score = dt.timestamp()
                             except ValueError:
                                 score = time.time()
                         else:
                             score = time.time()
 
-                        pipeline.zadd(f"unusual_whales:darkpool:{ticker}", {
-                                      json.dumps(trade): score})
+                        pipeline.zadd(
+                            f"unusual_whales:darkpool:{ticker}",
+                            {json.dumps(trade): score},
+                        )
 
                     # Store last update timestamp
                     pipeline.set(
-                        f"unusual_whales:darkpool:{ticker}:last_update", datetime.now().isoformat())
+                        f"unusual_whales:darkpool:{ticker}:last_update",
+                        datetime.now().isoformat(),
+                    )
 
                     # Execute pipeline
                     pipeline.execute()
@@ -3234,20 +4055,26 @@ class UnusualWhalesClient:
                 # Process with GPU if available
                 if self.use_gpu and self.gpu_accelerator.gpu_initialized:
                     self.thread_pool.submit(
-                        self._process_dark_pool_trades_gpu, data["data"])
+                        self._process_dark_pool_trades_gpu,
+                        data["data"],
+                    )
 
                 return data["data"]
-            else:
-                error_msg = data.get("error", "Unknown error") if isinstance(
-                    data, dict) else "Unknown error"
-                logger.warning(
-                    f"Failed to get dark pool trades for {ticker}: {error_msg}")
-                return []
+            error_msg = (
+                data.get("error", "Unknown error")
+                if isinstance(data, dict)
+                else "Unknown error"
+            )
+            logger.warning(
+                f"Failed to get dark pool trades for {ticker}: {error_msg}",
+            )
+            return []
         except Exception as e:
-            logger.error(f"Error getting dark pool trades for {ticker}: {e}")
+            logger.exception(
+                f"Error getting dark pool trades for {ticker}: {e}")
             return []
 
-    async def start_scheduled_tasks(self, event_loop=None):
+    async def start_scheduled_tasks(self, event_loop=None) -> None:
         """
         Start scheduled tasks for data collection
 
@@ -3260,20 +4087,24 @@ class UnusualWhalesClient:
             self.event_loop = asyncio.get_event_loop()
 
         # Schedule unusual activity updates
-        self.scheduled_tasks['unusual_activity'] = self.event_loop.create_task(
+        self.scheduled_tasks["unusual_activity"] = self.event_loop.create_task(
             self._schedule_task(
-                self.get_alerts, UNUSUAL_WHALES_REFRESH_INTERVALS['unusual_activity'])
+                self.get_alerts,
+                UNUSUAL_WHALES_REFRESH_INTERVALS["unusual_activity"],
+            ),
         )
 
         # Schedule dark pool updates
-        self.scheduled_tasks['dark_pool'] = self.event_loop.create_task(
-            self._schedule_task(self.get_recent_dark_pool_trades,
-                                UNUSUAL_WHALES_REFRESH_INTERVALS['dark_pool'])
+        self.scheduled_tasks["dark_pool"] = self.event_loop.create_task(
+            self._schedule_task(
+                self.get_recent_dark_pool_trades,
+                UNUSUAL_WHALES_REFRESH_INTERVALS["dark_pool"],
+            ),
         )
 
         logger.info("Scheduled tasks started")
 
-    async def _schedule_task(self, task_func, interval, *args, **kwargs):
+    async def _schedule_task(self, task_func, interval, *args, **kwargs) -> None:
         """
         Schedule a task to run at regular intervals
 
@@ -3287,12 +4118,12 @@ class UnusualWhalesClient:
             try:
                 await task_func(*args, **kwargs)
             except Exception as e:
-                logger.error(
+                logger.exception(
                     f"Error in scheduled task {task_func.__name__}: {e}")
 
             await asyncio.sleep(interval)
 
-    async def schedule_ticker_updates(self, tickers, intervals=None):
+    async def schedule_ticker_updates(self, tickers, intervals=None) -> None:
         """
         Schedule updates for specific tickers
 
@@ -3302,23 +4133,23 @@ class UnusualWhalesClient:
         """
         if not intervals:
             intervals = {
-                'flow': UNUSUAL_WHALES_REFRESH_INTERVALS['flow'],
-                'dark_pool': UNUSUAL_WHALES_REFRESH_INTERVALS['dark_pool']
+                "flow": UNUSUAL_WHALES_REFRESH_INTERVALS["flow"],
+                "dark_pool": UNUSUAL_WHALES_REFRESH_INTERVALS["dark_pool"],
             }
 
         # Schedule flow updates
-        self.scheduled_tasks['flow'] = self.event_loop.create_task(
-            self._schedule_flow_updates(tickers, intervals['flow'])
+        self.scheduled_tasks["flow"] = self.event_loop.create_task(
+            self._schedule_flow_updates(tickers, intervals["flow"]),
         )
 
         # Schedule dark pool updates
-        self.scheduled_tasks['dark_pool_tickers'] = self.event_loop.create_task(
-            self._schedule_dark_pool_updates(tickers, intervals['dark_pool'])
+        self.scheduled_tasks["dark_pool_tickers"] = self.event_loop.create_task(
+            self._schedule_dark_pool_updates(tickers, intervals["dark_pool"]),
         )
 
         logger.info(f"Scheduled updates for {len(tickers)} tickers")
 
-    async def _schedule_flow_updates(self, tickers, interval):
+    async def _schedule_flow_updates(self, tickers, interval) -> None:
         """Schedule flow updates for specific tickers"""
         while self.running:
             for ticker in tickers:
@@ -3328,7 +4159,7 @@ class UnusualWhalesClient:
                 try:
                     await self.get_flow_alerts(ticker)
                 except Exception as e:
-                    logger.error(
+                    logger.exception(
                         f"Error updating flow alerts for {ticker}: {e}")
 
                 # Small delay between requests to avoid rate limits
@@ -3337,7 +4168,7 @@ class UnusualWhalesClient:
             # Wait until next update cycle
             await asyncio.sleep(interval)
 
-    async def _schedule_dark_pool_updates(self, tickers, interval):
+    async def _schedule_dark_pool_updates(self, tickers, interval) -> None:
         """Schedule dark pool updates for specific tickers"""
         while self.running:
             for ticker in tickers:
@@ -3347,8 +4178,9 @@ class UnusualWhalesClient:
                 try:
                     await self.get_dark_pool_trades(ticker)
                 except Exception as e:
-                    logger.error(
-                        f"Error updating dark pool trades for {ticker}: {e}")
+                    logger.exception(
+                        f"Error updating dark pool trades for {ticker}: {e}",
+                    )
 
                 # Small delay between requests to avoid rate limits
                 await asyncio.sleep(0.5)
@@ -3356,7 +4188,7 @@ class UnusualWhalesClient:
             # Wait until next update cycle
             await asyncio.sleep(interval)
 
-    async def close(self):
+    async def close(self) -> None:
         """Close all connections and resources"""
         logger.info("Closing Unusual Whales API client")
         self.running = False
@@ -3368,13 +4200,13 @@ class UnusualWhalesClient:
                 try:
                     task.cancel()
                 except Exception as e:
-                    logger.error(f"Error cancelling task {name}: {e}")
+                    logger.exception(f"Error cancelling task {name}: {e}")
 
         # Close connection pool
         try:
             await self.connection_pool.close()
         except Exception as e:
-            logger.error(f"Error closing connection pool: {e}")
+            logger.exception(f"Error closing connection pool: {e}")
 
         # Clean up GPU resources
         self.gpu_accelerator.clear_memory()

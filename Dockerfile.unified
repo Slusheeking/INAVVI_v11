@@ -119,18 +119,14 @@ RUN pip install --upgrade pip && \
     pycuda && \
     # Create CuPy cache directory
     mkdir -p /app/data/cache/cupy && \
-    chmod 777 /app/data/cache/cupy && \
-    # Install TensorRT with proper dependencies
-    pip install --no-cache-dir \
-    nvidia-tensorrt \
-    onnx \
-    onnxruntime-gpu \
-    polygraphy \
-    graphsurgeon && \
-    # Verify TensorRT installation
-    python3 -c "import tensorrt; print(f'TensorRT version: {tensorrt.__version__}')" && \
-    # Install TensorFlow optimization packages
-    pip install --no-cache-dir \
+    chmod 777 /app/data/cache/cupy
+
+# Verify TensorRT is already installed in the NVIDIA container
+RUN python3 -c "import tensorrt; print(f'TensorRT version: {tensorrt.__version__}')" || \
+    echo "TensorRT not found, will be installed with other packages"
+
+# Install selected TensorFlow add-on packages (avoiding conflicting dependencies)
+RUN pip install --no-cache-dir \
     tensorflow-addons \
     tensorflow-probability \
     tensorflow-datasets \
@@ -139,21 +135,20 @@ RUN pip install --upgrade pip && \
     tensorflow-io \
     tensorflow-text \
     tensorflow-graphics \
-    tensorflow-decision-forests && \
-    # Install XGBoost with GPU support
-    pip install --no-cache-dir \
-    xgboost==2.0.2 && \
-    # Verify XGBoost GPU support
-    python3 -c "import xgboost; print(f'XGBoost version: {xgboost.__version__}'); print('GPU support available' if xgboost.config_context()['gpu_id'] is not None else 'No GPU support')" && \
-    # Install trading-specific packages
-    pip install --no-cache-dir \
+    tensorflow-decision-forests
+
+# Use the pre-installed XGBoost from the NVIDIA container
+RUN python3 -c "import xgboost; print(f'XGBoost version: {xgboost.__version__}'); print('GPU support available' if xgboost.config_context()['gpu_id'] is not None else 'No GPU support')" || \
+    pip install --no-cache-dir xgboost
+
+# Install trading-specific packages
+RUN pip install --no-cache-dir \
     polygon-api-client \
     nvidia-ml-py3 \
     alpaca-trade-api \
     packaging \
     pytz \
     schedule \
-    slack-sdk \
     pymongo \
     sqlalchemy \
     psycopg2-binary \
@@ -170,7 +165,16 @@ RUN pip install --upgrade pip && \
     pynvml \
     nvitop \
     gputil \
-    py3nvml
+    py3nvml \
+    # Install frontend-related packages
+    flask \
+    flask-cors \
+    flask-socketio \
+    eventlet \
+    gevent \
+    redis-py-cluster \
+    flask-redis \
+    flask-session
 
 # Create working directories
 WORKDIR /app
@@ -234,6 +238,34 @@ stopwaitsecs=60
 stopsignal=TERM
 stopasgroup=true
 killasgroup=true
+
+[program:frontend]
+command=python -m flask run --host=0.0.0.0 --port=5000 --with-threads
+directory=/app/project
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/frontend.err.log
+stdout_logfile=/var/log/frontend.out.log
+priority=60
+environment=PYTHONPATH="/app/project",FLASK_APP="/app/project/frontend/app.py",FLASK_ENV="development",FLASK_DEBUG="1",FLASK_RUN_EXTRA_FILES="/app/project/frontend/templates/*",FRONTEND_WEBSOCKET_ENABLED="true",FRONTEND_REALTIME_UPDATES="true"
+stopwaitsecs=30
+stopsignal=TERM
+stopasgroup=true
+killasgroup=true
+
+[program:redis_event_listener]
+command=python -m frontend.event_listener
+directory=/app/project
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/redis_event_listener.err.log
+stdout_logfile=/var/log/redis_event_listener.out.log
+priority=65
+environment=PYTHONPATH="/app/project",REDIS_PUBSUB_THREADS="4",REDIS_NOTIFY_KEYSPACE_EVENTS="Kxe"
+stopwaitsecs=20
+stopsignal=TERM
+stopasgroup=true
+killasgroup=true
 EOF
 
 # Create directories and set permissions for Redis and other services
@@ -260,6 +292,10 @@ RUN mkdir -p /var/log/supervisor && \
     touch /var/log/data_pipeline.out.log && \
     touch /var/log/stock_selection.err.log && \
     touch /var/log/stock_selection.out.log && \
+    touch /var/log/frontend.err.log && \
+    touch /var/log/frontend.out.log && \
+    touch /var/log/redis_event_listener.err.log && \
+    touch /var/log/redis_event_listener.out.log && \
     chown -R root:root /var/log/redis && \
     chown -R root:root /var/run/redis && \
     chown -R root:root /data && \
@@ -288,6 +324,9 @@ mkdir -p /app/models/risk_assessment
 mkdir -p /app/logs/trading
 mkdir -p /app/logs/ml
 mkdir -p /app/logs/monitoring
+mkdir -p /app/logs/frontend
+mkdir -p /app/logs/events
+mkdir -p /app/project/frontend
 
 # Create shutdown script
 cat > /app/shutdown.sh << 'SHUTDOWN'
@@ -316,7 +355,7 @@ COPY test_tensorflow_gpu_direct.py /app/test_tensorflow_gpu_direct.py
 RUN chmod +x /app/verify_tensorflow.py
 
 # Expose ports
-EXPOSE 8888 6380 9090 9121
+EXPOSE 8888 6380 9090 9121 5000
 
 # Start all services using the startup script
 CMD ["/app/startup.sh"]

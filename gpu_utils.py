@@ -17,6 +17,7 @@ import os
 import time
 import logging
 import gc
+import json
 import threading
 import numpy as np
 import psutil
@@ -65,12 +66,42 @@ except ImportError:
 # Import pynvml for GPU memory monitoring if available
 try:
     import pynvml
+
     PYNVML_AVAILABLE = True
 except ImportError:
     PYNVML_AVAILABLE = False
     logger.warning(
         "pynvml not available. GPU memory monitoring will be limited")
 
+# Import Redis for frontend notifications if available
+try:
+    import redis
+
+    REDIS_AVAILABLE = True
+
+    # Configure Redis client for frontend notifications
+    redis_client = redis.Redis(
+        host=os.environ.get("REDIS_HOST", "localhost"),
+        port=int(os.environ.get("REDIS_PORT", 6380)),
+        db=int(os.environ.get("REDIS_DB", 0)),
+        password=os.environ.get("REDIS_PASSWORD", ""),
+        decode_responses=True,
+        socket_timeout=5,
+    )
+
+    # Test Redis connection
+    try:
+        redis_client.ping()
+        logger.info("Redis connection established for frontend notifications")
+    except Exception as e:
+        logger.warning(f"Redis connection failed: {e}")
+        REDIS_AVAILABLE = False
+
+except ImportError:
+    REDIS_AVAILABLE = False
+    redis_client = None
+    logger.warning(
+        "Redis not available. Frontend notifications will be disabled")
 # Environment variables for GPU configuration
 USE_GPU = os.environ.get('USE_GPU', 'true').lower() == 'true'
 GPU_MEMORY_LIMIT = int(os.environ.get('TF_CUDA_HOST_MEM_LIMIT_IN_MB', 16000))
@@ -450,6 +481,153 @@ def configure_cupy(gpu_index: int) -> bool:
 # MEMORY MANAGEMENT    #
 #########################
 
+def send_gpu_memory_update(used_bytes: int, free_bytes: int, total_bytes: int) -> bool:
+    """
+    Send GPU memory usage update to frontend via Redis
+
+    Args:
+        used_bytes: Used memory in bytes
+        free_bytes: Free memory in bytes
+        total_bytes: Total memory in bytes
+
+    Returns:
+        bool: True if notification was sent, False otherwise
+    """
+    if not REDIS_AVAILABLE or redis_client is None:
+        return False
+
+    try:
+        # Calculate usage percentage
+        usage_pct = (used_bytes / total_bytes) * 100
+
+        # Create event data
+        event_data = {
+            "type": "gpu_memory",
+            "data": {
+                "used_mb": used_bytes / (1024 * 1024),
+                "free_mb": free_bytes / (1024 * 1024),
+                "total_mb": total_bytes / (1024 * 1024),
+                "usage_pct": usage_pct,
+                "timestamp": time.time()
+            }
+        }
+
+        # Check if we need to send warning or critical alerts
+        if usage_pct > 90:
+            send_gpu_memory_critical_alert(usage_pct, used_bytes, total_bytes)
+        elif usage_pct > 75:
+            send_gpu_memory_warning(usage_pct, used_bytes, total_bytes)
+
+        # Publish to Redis
+        redis_client.publish("frontend:events", json.dumps(event_data))
+        return True
+
+    except Exception as e:
+        logger.warning(f"Error sending GPU memory update to frontend: {e}")
+        return False
+
+
+def send_gpu_memory_warning(usage_pct: float, used_bytes: int, total_bytes: int) -> bool:
+    """
+    Send GPU memory warning to frontend via Redis
+
+    Args:
+        usage_pct: Usage percentage
+        used_bytes: Used memory in bytes
+        total_bytes: Total memory in bytes
+
+    Returns:
+        bool: True if notification was sent, False otherwise
+    """
+    if not REDIS_AVAILABLE or redis_client is None:
+        return False
+
+    try:
+        # Create event data
+        event_data = {
+            "type": "notification",
+            "data": {
+                "message": f"GPU memory usage high: {usage_pct:.1f}%",
+                "used_mb": used_bytes / (1024 * 1024),
+                "total_mb": total_bytes / (1024 * 1024),
+                "usage_pct": usage_pct,
+                "level": "warning",
+                "category": "system",
+                "timestamp": time.time()
+            }
+        }
+
+        # Publish to Redis
+        redis_client.publish("frontend:events", json.dumps(event_data))
+
+        # Also store as a notification
+        notification = {
+            "level": "warning",
+            "message": f"GPU memory usage high: {usage_pct:.1f}%",
+            "timestamp": time.time(),
+            "category": "system"
+        }
+        redis_client.lpush("frontend:notifications", json.dumps(notification))
+        redis_client.ltrim("frontend:notifications", 0, 99)
+
+        return True
+
+    except Exception as e:
+        logger.warning(f"Error sending GPU memory warning to frontend: {e}")
+        return False
+
+
+def send_gpu_memory_critical_alert(usage_pct: float, used_bytes: int, total_bytes: int) -> bool:
+    """
+    Send GPU memory critical alert to frontend via Redis
+
+    Args:
+        usage_pct: Usage percentage
+        used_bytes: Used memory in bytes
+        total_bytes: Total memory in bytes
+
+    Returns:
+        bool: True if notification was sent, False otherwise
+    """
+    if not REDIS_AVAILABLE or redis_client is None:
+        return False
+
+    try:
+        # Create event data
+        event_data = {
+            "type": "notification",
+            "data": {
+                "message": f"GPU memory usage critical: {usage_pct:.1f}%",
+                "used_mb": used_bytes / (1024 * 1024),
+                "total_mb": total_bytes / (1024 * 1024),
+                "usage_pct": usage_pct,
+                "level": "error",
+                "category": "system",
+                "timestamp": time.time()
+            }
+        }
+
+        # Publish to Redis
+        redis_client.publish("frontend:events", json.dumps(event_data))
+
+        # Also store as a notification
+        notification = {
+            "level": "error",
+            "message": f"GPU memory usage critical: {usage_pct:.1f}%",
+            "timestamp": time.time(),
+            "category": "system"
+        }
+        redis_client.lpush("frontend:notifications", json.dumps(notification))
+        redis_client.ltrim("frontend:notifications", 0, 99)
+
+        return True
+
+    except Exception as e:
+        logger.warning(
+            f"Error sending GPU memory critical alert to frontend: {e}")
+        return False
+
+
 def log_memory_usage(location_tag: str) -> Dict[str, float]:
     """
     Log CPU and GPU memory usage
@@ -491,6 +669,11 @@ def log_memory_usage(location_tag: str) -> Dict[str, float]:
                     f"GPU: Used={used/(1024**2):.2f}MB, Free={free/(1024**2):.2f}MB, "
                     f"Total={total/(1024**2):.2f}MB, Used={used/total*100:.2f}%"
                 )
+
+                # Send memory usage to frontend if Redis is available
+                if REDIS_AVAILABLE:
+                    send_gpu_memory_update(used, free, total)
+
             except Exception as e:
                 logger.warning(f"Error getting GPU memory info: {e}")
         else:
@@ -804,6 +987,10 @@ class GPUMemoryManager:
                     # Limit history length
                     if len(self.stats_history) > self.max_history:
                         self.stats_history = self.stats_history[-self.max_history:]
+
+                    # Send memory update to frontend every 5 seconds
+                    if int(time.time()) % 5 == 0 and REDIS_AVAILABLE:
+                        send_gpu_memory_update(used, free, total)
 
                     # Check if cleanup is needed
                     if used_ratio > self.memory_threshold:

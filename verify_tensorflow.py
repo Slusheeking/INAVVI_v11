@@ -2,93 +2,91 @@
 """
 TensorFlow GPU Verification Script
 
-This script verifies that TensorFlow is properly installed and configured with GPU support.
+This script verifies that TensorFlow is properly installed and can access the GPU.
+It prints information about the TensorFlow version, available devices, and GPU capabilities.
 """
 
 import os
 import sys
-import platform
-from datetime import datetime
-
 import tensorflow as tf
 import numpy as np
+from datetime import datetime
 
 
-def print_separator():
+def verify_tensorflow():
+    """Verify TensorFlow installation and GPU access."""
+    print("=" * 80)
+    print("TensorFlow GPU Verification")
     print("=" * 80)
 
+    # Print TensorFlow version
+    print(f"TensorFlow version: {tf.__version__}")
 
-def print_section(title):
-    print_separator()
-    print(f"  {title}")
-    print_separator()
-
-
-def main():
-    print_section("TensorFlow GPU Verification")
-
-    # Print basic system information
-    print(f"Date and Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Python Version: {platform.python_version()}")
-    print(f"TensorFlow Version: {tf.__version__}")
-    print(f"Platform: {platform.platform()}")
-    print(f"Processor: {platform.processor()}")
-
-    # Check for GPU availability
-    print("\nGPU Information:")
-    physical_devices = tf.config.list_physical_devices()
-
-    print(f"All Physical Devices: {len(physical_devices)}")
-    for device in physical_devices:
+    # Print available devices
+    print("\nAvailable devices:")
+    devices = tf.config.list_physical_devices()
+    for device in devices:
         print(f"  {device.device_type}: {device.name}")
 
-    gpu_devices = tf.config.list_physical_devices('GPU')
-    print(f"\nGPU Devices Available: {len(gpu_devices)}")
-
-    if len(gpu_devices) > 0:
-        for i, gpu in enumerate(gpu_devices):
-            print(f"  GPU {i}: {gpu.name}")
-
-        # Get GPU device details
-        try:
-            from tensorflow.python.client import device_lib
-            local_devices = device_lib.list_local_devices()
-            for device in local_devices:
-                if device.device_type == 'GPU':
-                    print(f"\nGPU Details:")
-                    print(f"  Name: {device.name}")
-                    print(
-                        f"  Memory: {device.memory_limit / (1024**3):.2f} GB")
-        except:
-            print("Could not retrieve detailed GPU information")
-
-        # Test GPU with a simple computation
-        print("\nRunning simple GPU computation test...")
-        with tf.device('/GPU:0'):
-            a = tf.random.normal([10000, 10000])
-            b = tf.random.normal([10000, 10000])
-            start_time = datetime.now()
-            c = tf.matmul(a, b)
-            elapsed = (datetime.now() - start_time).total_seconds()
-            print(f"  Matrix multiplication shape: {c.shape}")
-            print(f"  Computation time: {elapsed:.4f} seconds")
-
-        print("\nGPU TEST PASSED ✓")
-        return 0
-    else:
+    # Check for GPU devices
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
         print("\nNo GPU devices found. TensorFlow will run on CPU only.")
-        print("\nRunning simple CPU computation test...")
-        a = tf.random.normal([5000, 5000])
-        b = tf.random.normal([5000, 5000])
-        start_time = datetime.now()
-        c = tf.matmul(a, b)
-        elapsed = (datetime.now() - start_time).total_seconds()
-        print(f"  Matrix multiplication shape: {c.shape}")
-        print(f"  Computation time: {elapsed:.4f} seconds")
+        return False
 
-        print("\nCPU TEST PASSED ✓")
-        return 1
+    print(f"\nFound {len(gpus)} GPU device(s):")
+    for i, gpu in enumerate(gpus):
+        print(f"  GPU {i}: {gpu.name}")
+
+    # Print GPU details
+    print("\nGPU details:")
+    try:
+        for gpu_id, gpu in enumerate(gpus):
+            # Get GPU memory info
+            try:
+                gpu_mem = tf.config.experimental.get_memory_info(
+                    f'GPU:{gpu_id}')
+                print(f"  GPU {gpu_id} memory:")
+                print(f"    Current: {gpu_mem['current'] / (1024**3):.2f} GB")
+                print(f"    Peak: {gpu_mem['peak'] / (1024**3):.2f} GB")
+            except (ValueError, tf.errors.NotFoundError) as e:
+                print(f"  Could not get memory info for GPU {gpu_id}: {e}")
+    except Exception as e:
+        print(f"  Error getting GPU details: {e}")
+
+    # Run a simple test
+    print("\nRunning a simple matrix multiplication test on GPU...")
+    try:
+        with tf.device('/GPU:0'):
+            start_time = datetime.now()
+
+            # Create large matrices
+            matrix_size = 5000
+            a = tf.random.normal([matrix_size, matrix_size])
+            b = tf.random.normal([matrix_size, matrix_size])
+
+            # Perform matrix multiplication
+            c = tf.matmul(a, b)
+
+            # Force execution and synchronization
+            result = c.numpy()
+
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+
+            print(
+                f"  Matrix multiplication of {matrix_size}x{matrix_size} completed in {duration:.2f} seconds")
+            print(f"  Result shape: {result.shape}")
+            print(f"  Result mean: {np.mean(result):.6f}")
+            print(f"  Result std: {np.std(result):.6f}")
+
+            print("\nGPU test successful!")
+            return True
+    except Exception as e:
+        print(f"  Error during GPU test: {e}")
+        return False
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    success = verify_tensorflow()
+    sys.exit(0 if success else 1)

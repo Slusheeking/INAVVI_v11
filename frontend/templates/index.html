@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>INAVVI Trading System Dashboard</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-primary: #121212;
+            --bg-secondary: #1e1e1e;
+            --bg-tertiary: #2d2d2d;
+            --text-primary: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --accent-primary: #3d5afe;
+            --accent-secondary: #536dfe;
+            --success: #4caf50;
+            --warning: #ff9800;
+            --error: #f44336;
+            --info: #2196f3;
+            --card-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            --card-border: 1px solid #333;
+            --chart-grid: #333;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid var(--bg-tertiary);
+            margin-bottom: 20px;
+        }
+        
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .system-status-indicator {
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 5px 10px;
+            border-radius: 20px;
+            margin-left: 10px;
+            font-weight: 500;
+            background-color: var(--bg-tertiary);
+        }
+        
+        .status-badge.running {
+            background-color: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+        
+        .status-badge.stopped {
+            background-color: rgba(244, 67, 54, 0.2);
+            color: var(--error);
+        }
+        
+        .status-badge.warning {
+            background-color: rgba(255, 152, 0, 0.2);
+            color: var(--warning);
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-running {
+            background-color: var(--success);
+        }
+        
+        .status-stopped {
+            background-color: var(--error);
+        }
+        
+        .status-warning {
+            background-color: var(--warning);
+        }
+        
+        .status-unknown {
+            background-color: var(--text-secondary);
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .grid-2 {
+            grid-column: span 2;
+        }
+        
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .grid-2 {
+                grid-column: span 1;
+            }
+        }
+        
+        .card {
+            background-color: var(--bg-secondary);
+            border-radius: 8px;
+            box-shadow: var(--card-shadow);
+            border: var(--card-border);
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--bg-tertiary);
+        }
+        
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+        }
+        
+        .card-title i {
+            margin-right: 8px;
+            color: var(--accent-primary);
+        }
+        
+        .card-content {
+            font-size: 14px;
+        }
+        
+        .notification {
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            border-left: 4px solid transparent;
+            background-color: var(--bg-tertiary);
+            font-size: 14px;
+        }
+        
+        .notification:last-child {
+            margin-bottom: 0;
+        }
+        
+        .notification.info {
+            border-left-color: var(--info);
+            background-color: rgba(33, 150, 243, 0.1);
+        }
+        
+        .notification.success {
+            border-left-color: var(--success);
+            background-color: rgba(76, 175, 80, 0.1);
+        }
+        
+        .notification.warning {
+            border-left-color: var(--warning);
+            background-color: rgba(255, 152, 0, 0.1);
+        }
+        
+        .notification.error {
+            border-left-color: var(--error);
+            background-color: rgba(244, 67, 54, 0.1);
+        }
+        
+        .notification-time {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        
+        .notification-message {
+            color: var(--text-primary);
+        }
+        
+        .progress-container {
+            width: 100%;
+            height: 8px;
+            background-color: var(--bg-tertiary);
+            border-radius: 4px;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        
+        .progress-bar.success {
+            background-color: var(--success);
+        }
+        
+        .progress-bar.warning {
+            background-color: var(--warning);
+        }
+        
+        .progress-bar.error {
+            background-color: var(--error);
+        }
+        
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .stat-item {
+            background-color: var(--bg-tertiary);
+            border-radius: 6px;
+            padding: 15px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: var(--text-primary);
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .component-list {
+            list-style: none;
+        }
+        
+        .component-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--bg-tertiary);
+        }
+        
+        .component-item:last-child {
+            border-bottom: none;
+        }
+        
+        .component-name {
+            flex: 1;
+        }
+        
+        .gpu-stats {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .gpu-memory-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 5px;
+        }
+        
+        .gpu-memory-details {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+        
+        .gpu-memory-usage {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
+        .pattern-list {
+            list-style: none;
+        }
+        
+        .pattern-item {
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            background-color: var(--bg-tertiary);
+            border-left: 4px solid var(--accent-primary);
+        }
+        
+        .pattern-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        
+        .pattern-name {
+            font-weight: 600;
+        }
+        
+        .pattern-confidence {
+            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            background-color: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+        
+        .pattern-details {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        
+        .position-list {
+            list-style: none;
+        }
+        
+        .position-item {
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            background-color: var(--bg-tertiary);
+            border-left: 4px solid var(--accent-primary);
+        }
+        
+        .position-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        
+        .position-ticker {
+            font-weight: 600;
+        }
+        
+        .position-pnl {
+            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 10px;
+        }
+        
+        .position-pnl.positive {
+            background-color: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+        
+        .position-pnl.negative {
+            background-color: rgba(244, 67, 54, 0.2);
+            color: var(--error);
+        }
+        
+        .position-details {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        
+        .chart-container {
+            width: 100%;
+            height: 200px;
+            margin-top: 15px;
+        }
+        
+        .refresh-time {
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-align: right;
+            margin-top: 10px;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .badge.success {
+            background-color: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+        
+        .badge.warning {
+            background-color: rgba(255, 152, 0, 0.2);
+            color: var(--warning);
+        }
+        
+        .badge.error {
+            background-color: rgba(244, 67, 54, 0.2);
+            color: var(--error);
+        }
+        
+        .badge.info {
+            background-color: rgba(33, 150, 243, 0.2);
+            color: var(--info);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>INAVVI Trading System Dashboard</h1>
+            <div class="system-status-indicator">
+                <span>System Status:</span>
+                <div id="system-status" class="status-badge">
+                    <div class="status-indicator status-unknown"></div>
+                    <span>Unknown</span>
+                </div>
+            </div>
+        </header>
+        
+        <div class="grid">
+            <!-- System Overview Card -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="fas fa-server"></i> System Overview
+                    </div>
+                </div>
+                <div class="card-content">
+                    <div id="system-details">
+                        <div class="stat-grid">
+                            <div class="stat-item">
+                                <div class="stat-value" id="uptime">-</div>
+                                <div class="stat-label">Uptime</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value" id="active-positions">0</div>
+                                <div class="stat-label">Active Positions</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value" id="pending-orders">0</div>
+                                <div class="stat-label">Pending Orders</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value" id="day-trading-candidates">0</div>
+                                <div class="stat-label">Day Trading Candidates</div>
+                            </div>
+                        </div>
+                        <div class="refresh-time">Last updated: <span id="last-updated">-</span></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- GPU Status Card -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="fas fa-microchip"></i> GPU Status
+                    </div>
+                </div>
+                <div class="card-content">
+                    <div id="gpu-status" class="gpu-stats">
+                        <div>
+                            <div class="gpu-memory-info">
+                                <span>Memory Usage:</span>
+                                <span id="gpu-memory-usage" class="gpu-memory-usage">-</span>
+                            </div>
+                            <div class="progress-container">
+                                <div id="gpu-memory-bar" class="progress-bar success" style="width: 0%"></div>
+                            </div>
+                            <div class="gpu-memory-details">
+                                <span id="gpu-memory-details">-</span>
+                            </div>
+                        </div>
+                        <div id="gpu-operations">
+                            <div class="badge info">No active GPU operations</div>
+                        </div>
+                        <div class="refresh-time">Last updated: <span id="gpu-last-updated">-</span></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Components Card -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="fas fa-puzzle-piece"></i> Components
+                    </div>
+                </div>
+                <div class="card-content">
+                    <ul id="components" class="component-list">
+                        <li>Loading component status...</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <!-- Portfolio Card -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="fas fa-chart-line"></i> Portfolio
+                    </div>
+                </div>
+                <div class="card-content">
+                    <div id="portfolio-stats" class="stat-grid">
+                        <div class="stat-item">
+                            <div class="stat-value" id="total-equity">$0.00</div>
+                            <div class="stat-label">Total Equity</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="cash-balance">$0.00</div>
+                            <div class="stat-label">Cash Balance</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="total-pnl">$0.00</div>
+                            <div class="stat-label">Total P&L</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="current-exposure">$0.00</div>
+                            <div class="stat-label">Current Exposure</div>
+                        </div>
+                    </div>
+                    <div class="refresh-time">Last updated: <span id="portfolio-last-updated">-</span></div>
+                </div>
+            </div>
+            
+            <!-- Active Positions Card -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="fas fa-exchange-alt"></i> Active Positions
+                    </div>
+                </div>
+                <div class="card-content">
+                    <ul id="positions" class="position-list">
+                        <li>No active positions</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <!-- Pattern Detection Card -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="fas fa-chart-bar"></i> Pattern Detection
+                    </div>
+                </div>
+                <div class="card-content">
+                    <ul id="patterns" class="pattern-list">
+                        <li>No patterns detected</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <!-- Notifications Card -->
+            <div class="card grid-2">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="fas fa-bell"></i> Recent Notifications
+                    </div>
+                </div>
+                <div class="card-content">
+                    <div id="notifications">
+                        <div class="notification info">
+                            <div class="notification-time">Loading notifications...</div>
+                            <div class="notification-message">Connecting to server...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Connect to WebSocket server
+        const socket = io();
+        let connected = false;
+        
+        // Handle connection events
+        socket.on('connect', function() {
+            console.log('Connected to server');
+            connected = true;
+            
+            // Update connection status
+            document.getElementById('system-status').innerHTML = `
+                <div class="status-indicator status-running"></div>
+                <span>Connected</span>
+            `;
+            document.getElementById('system-status').className = 'status-badge running';
+            
+            // Subscribe to events
+            socket.emit('subscribe', {type: 'system_status'});
+            socket.emit('subscribe', {type: 'notification'});
+            socket.emit('subscribe', {type: 'component_status'});
+            socket.emit('subscribe', {type: 'gpu_memory'});
+            socket.emit('subscribe', {type: 'system_event'});
+            socket.emit('subscribe', {type: 'portfolio_update'});
+            socket.emit('subscribe', {type: 'position_update'});
+            socket.emit('subscribe', {type: 'pattern_alert'});
+            
+            // Start updates
+            socket.emit('start_updates');
+            
+            // Initial data fetch
+            fetchSystemStatus();
+            fetchNotifications();
+            fetchPortfolio();
+            fetchPositions();
+            fetchPatterns();
+        });
+        
+        socket.on('disconnect', function() {
+            console.log('Disconnected from server');
+            connected = false;
+            
+            // Update connection status
+            document.getElementById('system-status').innerHTML = `
+                <div class="status-indicator status-stopped"></div>
+                <span>Disconnected</span>
+            `;
+            document.getElementById('system-status').className = 'status-badge stopped';
+            
+            // Start polling if disconnected
+            startPolling();
+        });
+        
+        // Handle system status updates
+        socket.on('system_status', function(data) {
+            console.log('System status update:', data);
+            updateSystemStatus(data);
+        });
+        
+        // Handle component status updates
+        socket.on('component_status', function(data) {
+            console.log('Component status update:', data);
+            updateComponents(data);
+        });
+        
+        // Handle GPU memory updates
+        socket.on('gpu_memory', function(data) {
+            console.log('GPU memory update:', data);
+            updateGpuStatus(data);
+        });
+        
+        // Handle notifications
+        socket.on('notification', function(data) {
+            console.log('Notification:', data);
+            addNotification(data);
+        });
+        
+        // Handle system events
+        socket.on('system_event', function(data) {
+            console.log('System event:', data);
+            addSystemEvent(data);
+        });
+        
+        // Handle portfolio updates
+        socket.on('portfolio_update', function(data) {
+            console.log('Portfolio update:', data);
+            updatePortfolio(data);
+        });
+        
+        // Handle position updates
+        socket.on('position_update', function(data) {
+            console.log('Position update:', data);
+            updatePositions(data);
+        });
+        
+        // Handle position closed
+        socket.on('position_closed', function(data) {
+            console.log('Position closed:', data);
+            updatePositions(data);
+        });
+        
+        // Handle pattern alerts
+        socket.on('pattern_alert', function(data) {
+            console.log('Pattern alert:', data);
+            addPattern(data);
+        });
+        
+        // Update system status
+        function updateSystemStatus(data) {
+            const statusElement = document.getElementById('system-status');
+            const statusClass = data.running ? 'running' :
+                               data.status === 'warning' ? 'warning' : 'stopped';
+            
+            statusElement.innerHTML = `
+                <div class="status-indicator status-${statusClass}"></div>
+                <span>${data.running ? 'Running' : 'Stopped'}</span>
+            `;
+            statusElement.className = `status-badge ${statusClass}`;
+            
+            // Update last updated time
+            const lastUpdated = new Date(data.timestamp * 1000).toLocaleString();
+            document.getElementById('last-updated').textContent = lastUpdated;
+            
+            // Update uptime if available
+            if (data.system_info && data.system_info.uptime_seconds) {
+                const uptime = formatUptime(data.system_info.uptime_seconds);
+                document.getElementById('uptime').textContent = uptime;
+            }
+            
+            // Update positions count
+            if (data.active_positions !== undefined) {
+                document.getElementById('active-positions').textContent = data.active_positions;
+            }
+            
+            // Update pending orders count
+            if (data.pending_orders !== undefined) {
+                document.getElementById('pending-orders').textContent = data.pending_orders;
+            }
+            
+            // Update day trading candidates count
+            if (data.day_trading_candidates !== undefined) {
+                document.getElementById('day-trading-candidates').textContent = data.day_trading_candidates;
+            }
+        }
+        
+        // Update components
+        function updateComponents(data) {
+            const componentsElement = document.getElementById('components');
+            if (data && data.components) {
+                let componentsHtml = '';
+                for (const [name, status] of Object.entries(data.components)) {
+                    const componentClass = status === 'running' ? 'status-running' :
+                                         status === 'stopped' ? 'status-stopped' : 'status-unknown';
+                    componentsHtml += `
+                        <li class="component-item">
+                            <div class="component-name">${name}</div>
+                            <div class="status-indicator ${componentClass}"></div>
+                            <span>${status}</span>
+                        </li>
+                    `;
+                }
+                componentsElement.innerHTML = componentsHtml;
+            }
+        }
+        
+        // Update GPU status
+        function updateGpuStatus(data) {
+            const gpuElement = document.getElementById('gpu-status');
+            if (data) {
+                const usagePct = data.usage_pct || (data.used_mb / data.total_mb * 100);
+                const usageClass = usagePct > 90 ? 'error' :
+                                 usagePct > 75 ? 'warning' : 'success';
+                
+                // Update memory usage
+                document.getElementById('gpu-memory-usage').textContent = `${usagePct.toFixed(1)}%`;
+                document.getElementById('gpu-memory-usage').className = `gpu-memory-usage ${usageClass}`;
+                
+                // Update progress bar
+                const memoryBar = document.getElementById('gpu-memory-bar');
+                memoryBar.style.width = `${usagePct}%`;
+                memoryBar.className = `progress-bar ${usageClass}`;
+                
+                // Update memory details
+                document.getElementById('gpu-memory-details').textContent = 
+                    `${(data.used_mb / 1024).toFixed(2)}GB used of ${(data.total_mb / 1024).toFixed(2)}GB total (${(data.free_mb / 1024).toFixed(2)}GB free)`;
+                
+                // Update last updated time
+                const lastUpdated = new Date(data.timestamp * 1000).toLocaleTimeString();
+                document.getElementById('gpu-last-updated').textContent = lastUpdated;
+                
+                // Update GPU operations if available
+                if (data.operation) {
+                    document.getElementById('gpu-operations').innerHTML = `
+                        <div class="badge info">
+                            <i class="fas fa-cog fa-spin"></i> ${data.operation}
+                        </div>
+                    `;
+                }
+            }
+        }
+        
+        // Add notification
+        function addNotification(notification) {
+            const notificationsElement = document.getElementById('notifications');
+            
+            // Create notification element
+            const notificationElement = document.createElement('div');
+            const levelClass = notification.level === 'info' ? 'info' :
+                             notification.level === 'success' ? 'success' :
+                             notification.level === 'warning' ? 'warning' :
+                             notification.level === 'error' ? 'error' : 'info';
+            
+            notificationElement.className = `notification ${levelClass}`;
+            
+            // Format time
+            const time = new Date(notification.timestamp * 1000).toLocaleTimeString();
+            
+            // Set content
+            notificationElement.innerHTML = `
+                <div class="notification-time">${time}</div>
+                <div class="notification-message">${notification.message}</div>
+            `;
+            
+            // Add to the top
+            if (notificationsElement.firstChild) {
+                notificationsElement.insertBefore(notificationElement, notificationsElement.firstChild);
+            } else {
+                notificationsElement.appendChild(notificationElement);
+            }
+            
+            // Limit to 10 notifications
+            while (notificationsElement.children.length > 10) {
+                notificationsElement.removeChild(notificationsElement.lastChild);
+            }
+        }
+        
+        // Add system event
+        function addSystemEvent(event) {
+            // Create notification from system event
+            const notification = {
+                level: event.type.includes('error') || event.type.includes('critical') ? 'error' :
+                       event.type.includes('warning') ? 'warning' :
+                       event.type.includes('success') ? 'success' : 'info',
+                message: event.message,
+                timestamp: event.timestamp
+            };
+            
+            // Add as notification
+            addNotification(notification);
+            
+            // Update GPU operations if it's a GPU event
+            if (event.type.includes('gpu')) {
+                document.getElementById('gpu-operations').innerHTML = `
+                    <div class="badge ${notification.level}">
+                        ${event.message}
+                    </div>
+                `;
+            }
+        }
+        
+        // Update portfolio
+        function updatePortfolio(data) {
+            if (data) {
+                // Update total equity
+                if (data.total_equity !== undefined) {
+                    document.getElementById('total-equity').textContent = `$${parseFloat(data.total_equity).toFixed(2)}`;
+                }
+                
+                // Update cash balance
+                if (data.cash !== undefined) {
+                    document.getElementById('cash-balance').textContent = `$${parseFloat(data.cash).toFixed(2)}`;
+                }
+                
+                // Update total P&L
+                if (data.total_pnl !== undefined) {
+                    const pnl = parseFloat(data.total_pnl);
+                    document.getElementById('total-pnl').textContent = `$${pnl.toFixed(2)}`;
+                    document.getElementById('total-pnl').style.color = pnl >= 0 ? 'var(--success)' : 'var(--error)';
+                }
+                
+                // Update current exposure
+                if (data.current_exposure !== undefined) {
+                    document.getElementById('current-exposure').textContent = `$${parseFloat(data.current_exposure).toFixed(2)}`;
+                }
+                
+                // Update last updated time
+                const lastUpdated = new Date(data.timestamp * 1000).toLocaleTimeString();
+                document.getElementById('portfolio-last-updated').textContent = lastUpdated;
+            }
+        }
+        
+        // Update positions
+        function updatePositions(data) {
+            // Fetch all positions to refresh the list
+            fetchPositions();
+        }
+        
+        // Add pattern
+        function addPattern(data) {
+            const patternsElement = document.getElementById('patterns');
+            
+            // If this is the first pattern, clear the "No patterns" message
+            if (patternsElement.innerHTML.includes('No patterns detected')) {
+                patternsElement.innerHTML = '';
+            }
+            // Create pattern element
+            const patternElement = document.createElement('li');
+            patternElement.className = 'pattern-item';
+            
+            // Format pattern name
+            const patternName = data.pattern ? data.pattern.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'Unknown Pattern';
+            
+            // Set content
+            patternElement.innerHTML = `
+                <div class="pattern-header">
+                    <div class="pattern-name">${data.ticker} - ${patternName}</div>
+                    <div class="pattern-confidence">${Math.round(data.confidence * 100)}% confidence</div>
+                </div>
+                <div class="pattern-details">
+                    Detected at ${new Date(data.timestamp * 1000).toLocaleTimeString()}
+                </div>
+            `;
+            
+            // Add to the list
+            patternsElement.appendChild(patternElement);
+            
+            // Limit to 5 patterns
+            while (patternsElement.children.length > 5) {
+                patternsElement.removeChild(patternsElement.lastChild);
+            }
+        }
+        
+        // Format uptime
+        function formatUptime(seconds) {
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            
+            let result = '';
+            if (days > 0) result += `${days}d `;
+            if (hours > 0) result += `${hours}h `;
+            if (minutes > 0) result += `${minutes}m `;
+            result += `${secs}s`;
+            
+            return result;
+        }
+        
+        // Fetch system status
+        function fetchSystemStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    updateSystemStatus(data);
+                    
+                    // Update components
+                    if (data.components) {
+                        updateComponents({components: data.components});
+                    }
+                    
+                    // Update GPU status
+                    if (data.gpu && data.gpu.memory) {
+                        updateGpuStatus(data.gpu.memory);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching system status:', error);
+                    document.getElementById('system-status').innerHTML = `
+                        <div class="status-indicator status-unknown"></div>
+                        <span>Error: ${error.message}</span>
+                    `;
+                });
+        }
+        
+        // Fetch notifications
+        function fetchNotifications() {
+            fetch('/api/notifications')
+                .then(response => response.json())
+                .then(data => {
+                    const notificationsElement = document.getElementById('notifications');
+                    notificationsElement.innerHTML = '';
+                    
+                    if (data && data.length > 0) {
+                        for (let i = 0; i < Math.min(10, data.length); i++) {
+                            addNotification(data[i]);
+                        }
+                    } else {
+                        notificationsElement.innerHTML = '<div class="notification info"><div class="notification-message">No notifications</div></div>';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching notifications:', error);
+                    document.getElementById('notifications').innerHTML = `
+                        <div class="notification error">
+                            <div class="notification-message">Error loading notifications: ${error.message}</div>
+                        </div>
+                    `;
+                });
+        }
+        
+        // Fetch portfolio data
+        function fetchPortfolio() {
+            fetch('/api/portfolio')
+                .then(response => response.json())
+                .then(data => {
+                    updatePortfolio(data);
+                })
+                .catch(error => {
+                    console.error('Error fetching portfolio data:', error);
+                });
+        }
+        
+        // Fetch positions
+        function fetchPositions() {
+            fetch('/api/positions')
+                .then(response => response.json())
+                .then(data => {
+                    const positionsElement = document.getElementById('positions');
+                    
+                    if (data && data.length > 0) {
+                        let positionsHtml = '';
+                        for (const position of data) {
+                            const pnlClass = position.unrealized_pnl >= 0 ? 'positive' : 'negative';
+                            positionsHtml += `
+                                <li class="position-item">
+                                    <div class="position-header">
+                                        <div class="position-ticker">${position.ticker}</div>
+                                        <div class="position-pnl ${pnlClass}">
+                                            ${position.unrealized_pnl >= 0 ? '+' : ''}$${position.unrealized_pnl.toFixed(2)} (${position.unrealized_pnl_pct.toFixed(2)}%)
+                                        </div>
+                                    </div>
+                                    <div class="position-details">
+                                        <div>${Math.abs(position.quantity)} shares @ $${position.entry_price.toFixed(2)}</div>
+                                        <div>Current: $${position.current_price.toFixed(2)}</div>
+                                    </div>
+                                </li>
+                            `;
+                        }
+                        positionsElement.innerHTML = positionsHtml;
+                    } else {
+                        positionsElement.innerHTML = '<li>No active positions</li>';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching positions:', error);
+                    document.getElementById('positions').innerHTML = '<li>Error loading positions</li>';
+                });
+        }
+        
+        // Fetch patterns
+        function fetchPatterns() {
+            fetch('/api/patterns')
+                .then(response => response.json())
+                .then(data => {
+                    const patternsElement = document.getElementById('patterns');
+                    
+                    if (data && data.length > 0) {
+                        patternsElement.innerHTML = '';
+                        for (let i = 0; i < Math.min(5, data.length); i++) {
+                            addPattern(data[i]);
+                        }
+                    } else {
+                        patternsElement.innerHTML = '<li>No patterns detected</li>';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching patterns:', error);
+                    document.getElementById('patterns').innerHTML = '<li>Error loading patterns</li>';
+                });
+        }
+        
+        // Start polling (fallback if WebSocket disconnects)
+        let pollingInterval = null;
+        function startPolling() {
+            if (!pollingInterval) {
+                pollingInterval = setInterval(() => {
+                    if (!connected) {
+                        fetchSystemStatus();
+                        fetchNotifications();
+                        fetchPortfolio();
+                        fetchPositions();
+                        fetchPatterns();
+                    } else {
+                        clearInterval(pollingInterval);
+                        pollingInterval = null;
+                    }
+                }, 10000);
+            }
+        }
+    </script>
+</body>
+</html>
+            

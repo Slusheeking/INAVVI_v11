@@ -50,7 +50,10 @@ from gpu_utils import (
     gpu_matrix_multiply,
     gpu_rolling_mean,
     gpu_batch_process,
-    GPUMemoryManager
+    GPUMemoryManager,
+    send_gpu_memory_update,
+    send_gpu_memory_warning,
+    send_gpu_memory_critical_alert
 )
 
 # Import TensorFlow with fallback
@@ -231,6 +234,17 @@ class TradingEngine:
             self.gpu_memory_manager.start()
             logger.info("GPU memory manager started")
 
+            # Send notification to frontend
+            self._send_frontend_notification(
+                "GPU memory manager started",
+                level="info",
+                category="system_gpu",
+                details={
+                    "cleanup_interval": 300,
+                    "memory_threshold": 0.8
+                }
+            )
+
         logger.info(
             "Trading Engine initialized with GPU acceleration" if self.gpu_initialized else "Trading Engine initialized (GPU not available)")
 
@@ -243,6 +257,13 @@ class TradingEngine:
                 logger.warning(
                     "No GPU devices detected, running in CPU-only mode")
                 self.use_gpu = False
+
+                # Send notification to frontend
+                self._send_frontend_notification(
+                    "No GPU devices detected, running in CPU-only mode",
+                    level="warning",
+                    category="system_gpu"
+                )
                 return False
 
             # Log detected GPUs
@@ -251,11 +272,27 @@ class TradingEngine:
                     logger.info(
                         f"Detected GPU: {gpu['name']} (index: {gpu['index']})")
 
+                    # Send notification to frontend
+                    self._send_frontend_notification(
+                        f"Detected GPU: {gpu['name']} (index: {gpu['index']})",
+                        level="info",
+                        category="system_gpu",
+                        details={"gpu_name": gpu['name'],
+                                 "gpu_index": gpu['index']}
+                    )
+
             # Initialize GPU
             success = initialize_gpu()
             if success:
                 self.gpu_initialized = True
                 logger.info("GPU initialization successful")
+
+                # Send notification to frontend
+                self._send_frontend_notification(
+                    "GPU initialization successful",
+                    level="success",
+                    category="system_gpu"
+                )
 
                 # Log GPU capabilities
                 if TF_AVAILABLE:
@@ -267,16 +304,45 @@ class TradingEngine:
                     logger.info(
                         "CuPy is available for GPU-accelerated array operations")
 
+                    # Get initial GPU memory info and send to frontend
+                    if CUPY_AVAILABLE:
+                        try:
+                            mem_info = cp.cuda.runtime.memGetInfo()
+                            free, total = mem_info
+                            used = total - free
+                            send_gpu_memory_update(used, free, total)
+
+                            # Log initial memory usage
+                            logger.info(
+                                f"Initial GPU memory: {used/(1024**2):.2f}MB used, {free/(1024**2):.2f}MB free, {total/(1024**2):.2f}MB total")
+                        except Exception as e:
+                            logger.warning(
+                                f"Error getting initial GPU memory info: {e}")
+
                 return True
             else:
                 logger.warning(
                     "GPU initialization failed, running in CPU-only mode")
                 self.use_gpu = False
+
+                # Send notification to frontend
+                self._send_frontend_notification(
+                    "GPU initialization failed, running in CPU-only mode",
+                    level="warning",
+                    category="system_gpu"
+                )
                 return False
 
         except Exception as e:
             logger.error(f"Error initializing GPU: {e}")
             self.use_gpu = False
+
+            # Send notification to frontend
+            self._send_frontend_notification(
+                f"Error initializing GPU: {e}",
+                level="error",
+                category="system_gpu"
+            )
             return False
 
     def _load_config(self, config_path):
@@ -484,6 +550,17 @@ class TradingEngine:
         self.tasks['market_close_monitor'] = asyncio.ensure_future(
             self._market_close_monitor())
 
+        # Send startup notification to frontend
+        self._send_frontend_notification(
+            "Trading engine started successfully",
+            level="success",
+            category="system_startup"
+        )
+
+        # Update frontend status immediately
+        account = self._get_account_info()
+        self._update_frontend_status(account)
+
         logger.info("Trading engine started")
 
     def stop(self):
@@ -494,6 +571,33 @@ class TradingEngine:
 
         logger.info("Stopping trading engine")
         self.running = False
+
+        # Send shutdown notification to frontend
+        if self.redis:
+            try:
+                # Send notification using our helper method
+                self._send_frontend_notification(
+                    message="Trading system shutting down",
+                    level="warning",
+                    category="system_shutdown"
+                )
+
+                # Update system status
+                system_status = json.loads(self.redis.get(
+                    "frontend:system:status") or "{}")
+                system_status["running"] = False
+                system_status["timestamp"] = time.time()
+                system_status["shutdown_time"] = time.time()
+                self.redis.set("frontend:system:status",
+                               json.dumps(system_status))
+
+                # Publish system shutdown event for real-time frontend updates
+                self.redis.publish("frontend:events", json.dumps({
+                    "type": "system_shutdown",
+                    "data": system_status
+                }))
+            except Exception as e:
+                logger.error(f"Error sending shutdown notification: {str(e)}")
 
         # Cancel async tasks
         for task_name, task in self.tasks.items():
@@ -518,6 +622,30 @@ class TradingEngine:
         # Shutdown thread pool
         self.executor.shutdown(wait=False)
 
+        # Final frontend notification
+        if self.redis:
+            try:
+                # Send final notification
+                shutdown_details = {"shutdown_time": time.time()}
+                self._send_frontend_notification(
+                    message="Trading system stopped",
+                    level="info",
+                    category="system_shutdown",
+                    details=shutdown_details
+                )
+
+                # Publish final shutdown event for real-time frontend updates
+                self.redis.publish("frontend:events", json.dumps({
+                    "type": "final_shutdown",
+                    "data": {
+                        "message": "Trading system stopped",
+                        "timestamp": time.time(),
+                        "details": shutdown_details
+                    }
+                }))
+            except Exception as e:
+                logger.error(f"Error sending final notification: {str(e)}")
+
         logger.info("Trading engine stopped")
 
     def status(self):
@@ -540,6 +668,26 @@ class TradingEngine:
                     "uptime_seconds": time.time() - self.daily_stats.get('start_time', time.time())
                 }
             }
+
+            # Update frontend status
+            if self.redis:
+                try:
+                    # Update system status in Redis for frontend
+                    self._update_frontend_status(account)
+
+                    # Add frontend-specific information
+                    frontend_keys = self.redis.keys("frontend:*")
+                    status_info["frontend"] = {
+                        "active": True,
+                        "keys_count": len(frontend_keys),
+                        "notification_count": self.redis.llen("frontend:notifications"),
+                        "position_history_count": self.redis.llen("frontend:positions:history"),
+                        "pattern_alerts_count": self.redis.llen("frontend:patterns:alerts")
+                    }
+                except Exception as e:
+                    logger.error(f"Error updating frontend status: {str(e)}")
+                    status_info["frontend"] = {
+                        "active": False, "error": str(e)}
 
             return status_info
         except Exception as e:
@@ -597,6 +745,9 @@ class TradingEngine:
                 try:
                     self.redis.delete("positions:active")
                     self.redis.delete("orders:pending")
+
+                    # Initialize frontend data structures
+                    self._initialize_frontend_data()
                 except redis.RedisError as e:
                     logger.warning(
                         f"Error clearing Redis positions/orders: {str(e)}")
@@ -606,6 +757,106 @@ class TradingEngine:
         except Exception as e:
             logger.error(
                 f"Error initializing trading engine state: {str(e)}", exc_info=True)
+
+    def _initialize_frontend_data(self):
+        """Initialize Redis data structures for frontend access"""
+        try:
+            if not self.redis:
+                return
+
+            logger.info("Initializing frontend data structures")
+
+            # Create initial system status
+            system_status = {
+                "timestamp": time.time(),
+                "running": self.running,
+                "active_positions": 0,
+                "pending_orders": 0,
+                "day_trading_candidates": 0,
+                "daily_stats": self.daily_stats,
+                "system_info": {
+                    "threads_active": len(self.threads),
+                    "tasks_active": len(self.tasks),
+                    "uptime_seconds": 0
+                }
+            }
+            self.redis.set("frontend:system:status", json.dumps(system_status))
+
+            # Publish initial system status for real-time frontend updates
+            self.redis.publish("frontend:events", json.dumps({
+                "type": "system_status",
+                "data": system_status
+            }))
+
+            # Create initial portfolio data
+            account = self._get_account_info()
+            portfolio_data = {
+                "total_equity": float(account['equity']) if account else 0,
+                "cash": float(account['cash']) if account else 0,
+                "buying_power": float(account['buying_power']) if account else 0,
+                "total_pnl": 0,
+                "profitable_trades": 0,
+                "trades_executed": 0,
+                "current_exposure": 0,
+                "max_drawdown": 0,
+                "timestamp": time.time()
+            }
+            self.redis.set("frontend:portfolio:latest",
+                           json.dumps(portfolio_data))
+
+            # Publish initial portfolio data for real-time frontend updates
+            self.redis.publish("frontend:events", json.dumps({
+                "type": "portfolio_update",
+                "data": portfolio_data
+            }))
+
+            # Initialize empty lists for history data
+            if not self.redis.exists("frontend:positions:history"):
+                self.redis.lpush("frontend:positions:history", json.dumps({
+                    "type": "system_start",
+                    "timestamp": time.time()
+                }))
+
+            if not self.redis.exists("frontend:portfolio:history"):
+                self.redis.lpush("frontend:portfolio:history",
+                                 json.dumps(portfolio_data))
+
+            if not self.redis.exists("frontend:portfolio:equity_curve"):
+                if account:
+                    equity_point = {
+                        "timestamp": time.time(),
+                        "value": float(account['equity'])
+                    }
+                    self.redis.lpush(
+                        "frontend:portfolio:equity_curve", json.dumps(equity_point))
+
+                    # Publish initial equity curve point for real-time frontend updates
+                    self.redis.publish("frontend:events", json.dumps({
+                        "type": "equity_update",
+                        "data": equity_point
+                    }))
+
+            if not self.redis.exists("frontend:patterns:alerts"):
+                self.redis.lpush("frontend:patterns:alerts", json.dumps({
+                    "type": "system_start",
+                    "timestamp": time.time()
+                }))
+
+            # Set notification that system has started using our helper method
+            self._send_frontend_notification(
+                message="Trading system started",
+                level="info",
+                category="system_startup",
+                details={
+                    "startup_time": time.time(),
+                    "equity": float(account['equity']) if account else 0
+                }
+            )
+
+            logger.info("Frontend data structures initialized")
+
+        except Exception as e:
+            logger.error(f"Error initializing frontend data: {str(e)}")
 
     def _reset_daily_stats(self):
         """Reset daily statistics"""
@@ -895,6 +1146,15 @@ class TradingEngine:
                 self.redis.set("market:is_open",
                                "1" if is_market_open else "0")
 
+                # Publish market status update for real-time frontend updates
+                self.redis.publish("frontend:events", json.dumps({
+                    "type": "market_status",
+                    "data": {
+                        "is_open": is_market_open,
+                        "timestamp": time.time()
+                    }
+                }))
+
                 # If market is about to close, exit all positions
                 if not is_market_open and self.active_positions and self._is_near_market_close():
                     logger.info("Market closing soon, exiting all positions")
@@ -915,9 +1175,45 @@ class TradingEngine:
         """Run peak detection monitors"""
         logger.info("Starting peak detection")
 
+        # Send notification to frontend about peak detection system startup
+        self._send_frontend_notification(
+            "Peak detection system starting",
+            level="info",
+            category="system_startup",
+            details={"component": "peak_detection"}
+        )
+
         try:
             # Get list of monitored tickers
             monitored_tickers = await self._get_monitored_tickers()
+
+            # Get initial GPU memory info
+            if self.gpu_initialized and CUPY_AVAILABLE:
+                try:
+                    mem_info = cp.cuda.runtime.memGetInfo()
+                    free, total = mem_info
+                    used = total - free
+                    send_gpu_memory_update(used, free, total)
+
+                    # Log initial memory usage
+                    logger.info(
+                        f"Initial GPU memory for peak detection: {used/(1024**2):.2f}MB used, {free/(1024**2):.2f}MB free, {total/(1024**2):.2f}MB total")
+
+                    # Send notification to frontend
+                    self._send_frontend_notification(
+                        "GPU memory status before peak detection",
+                        level="info",
+                        category="system_gpu",
+                        details={
+                            "memory_used_mb": used / (1024 * 1024),
+                            "memory_free_mb": free / (1024 * 1024),
+                            "memory_total_mb": total / (1024 * 1024),
+                            "memory_percent": (used / total) * 100
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Error getting initial GPU memory info for peak detection: {e}")
 
             # Start monitoring tasks
             monitoring_tasks = []
@@ -928,20 +1224,73 @@ class TradingEngine:
             logger.info(
                 f"Monitoring peaks for {len(monitored_tickers)} tickers")
 
+            # Send notification to frontend about monitoring start
+            self._send_frontend_notification(
+                f"Monitoring peaks for {len(monitored_tickers)} tickers",
+                level="info",
+                category="system_startup",
+                details={"tickers_count": len(monitored_tickers)}
+            )
+
             # Keep running until cancelled
             while self.running:
+                # Periodically check GPU memory usage
+                if self.gpu_initialized and CUPY_AVAILABLE and self.running:
+                    try:
+                        mem_info = cp.cuda.runtime.memGetInfo()
+                        free, total = mem_info
+                        used = total - free
+                        send_gpu_memory_update(used, free, total)
+
+                        # If memory usage is high, request cleanup
+                        if (used / total) > 0.8:
+                            if self.gpu_memory_manager:
+                                self.gpu_memory_manager.request_cleanup()
+                                logger.warning(
+                                    f"High GPU memory usage detected: {(used/total)*100:.1f}%, requesting cleanup")
+
+                                # Send warning to frontend
+                                send_gpu_memory_warning(used, free, total)
+                    except Exception as e:
+                        logger.warning(
+                            f"Error checking GPU memory during peak detection: {e}")
+
                 await asyncio.sleep(10)
 
         except asyncio.CancelledError:
             logger.info("Peak detection task cancelled")
+
+            # Send notification to frontend
+            self._send_frontend_notification(
+                "Peak detection system shutting down",
+                level="warning",
+                category="system_shutdown",
+                details={"component": "peak_detection"}
+            )
+
             # Cancel all monitoring tasks
             for task in monitoring_tasks:
                 task.cancel()
             # Wait for tasks to complete
             if monitoring_tasks:
                 await asyncio.gather(*monitoring_tasks, return_exceptions=True)
+
+            # Final GPU memory cleanup
+            if self.gpu_initialized and self.gpu_memory_manager:
+                self.gpu_memory_manager.request_cleanup()
+                logger.info(
+                    "Requested GPU memory cleanup on peak detection shutdown")
+
         except Exception as e:
             logger.error(f"Error in peak detection: {e}")
+
+            # Send error notification to frontend
+            self._send_frontend_notification(
+                f"Error in peak detection system: {str(e)}",
+                level="error",
+                category="system_error",
+                details={"component": "peak_detection", "error": str(e)}
+            )
 
     async def _run_opportunity_detection(self):
         """Run opportunity detection"""
@@ -1372,14 +1721,32 @@ class TradingEngine:
                 self.redis.hmset("execution:daily_stats", self.daily_stats)
 
                 # Publish position update
-                self.redis.publish("position_updates", json.dumps({
+                position_data = {
                     "type": "new_position",
                     "ticker": ticker,
                     "quantity": filled_qty,
                     "side": side,
                     "entry_price": filled_price,
                     "timestamp": time.time()
-                }))
+                }
+                self.redis.publish("position_updates",
+                                   json.dumps(position_data))
+
+                # Store for frontend access
+                self.redis.lpush("frontend:positions:history",
+                                 json.dumps(position_data))
+                self.redis.ltrim("frontend:positions:history",
+                                 0, 99)  # Keep last 100 entries
+                self.redis.set("frontend:positions:latest",
+                               json.dumps(position_data))
+
+                # Send notification to frontend
+                position_value = filled_price * filled_qty
+                self._send_frontend_notification(
+                    f"New position: {ticker} - {filled_qty} shares at ${filled_price:.2f} (${position_value:.2f})",
+                    level="success",
+                    category="trade"
+                )
 
             # Remove from pending orders
             if order_id in self.pending_orders:
@@ -1388,6 +1755,11 @@ class TradingEngine:
 
         except Exception as e:
             logger.error(f"Error handling filled order {order_id}: {str(e)}")
+            self._send_frontend_notification(
+                f"Error handling filled order for {order_info['ticker']}: {str(e)}",
+                level="error",
+                category="trade_error"
+            )
 
     def _handle_canceled_order(self, order_id, order_info):
         """Handle a canceled order"""
@@ -1641,7 +2013,7 @@ class TradingEngine:
             self.redis.ltrim("positions:history", 0, 99)
 
             # Publish position update
-            self.redis.publish("position_updates", json.dumps({
+            position_data = {
                 "type": "position_closed",
                 "ticker": ticker,
                 "quantity": quantity,
@@ -1651,7 +2023,48 @@ class TradingEngine:
                 "pnl_pct": pnl_pct,
                 "reason": reason,
                 "timestamp": time.time()
+            }
+            self.redis.publish("position_updates", json.dumps(position_data))
+
+            # Store for frontend access
+            self.redis.lpush("frontend:positions:history",
+                             json.dumps(position_data))
+            self.redis.ltrim("frontend:positions:history",
+                             0, 99)  # Keep last 100 entries
+            self.redis.set("frontend:positions:latest",
+                           json.dumps(position_data))
+
+            # Publish new position event for real-time frontend updates
+            self.redis.publish("frontend:events", json.dumps({
+                "type": "new_position",
+                "data": position_data
             }))
+
+            # Publish position closure event for real-time frontend updates
+            self.redis.publish("frontend:events", json.dumps({
+                "type": "position_closed",
+                "data": position_data
+            }))
+
+            # Update portfolio data for frontend
+            portfolio_data = {
+                "total_pnl": self.daily_stats['total_pnl'],
+                "profitable_trades": self.daily_stats['profitable_trades'],
+                "trades_executed": self.daily_stats['trades_executed'],
+                "current_exposure": self.daily_stats['current_exposure'],
+                "timestamp": time.time()
+            }
+            self.redis.set("frontend:portfolio:latest",
+                           json.dumps(portfolio_data))
+
+            # Send notification to frontend
+            pnl_status = "profit" if pnl > 0 else "loss"
+            notification_level = "success" if pnl > 0 else "warning"
+            self._send_frontend_notification(
+                f"Position closed: {ticker} - {pnl_status} of ${pnl:.2f} ({pnl_pct:.2f}%)",
+                level=notification_level,
+                category="trade_exit"
+            )
 
             logger.info(
                 f"Position closed for {ticker}: PnL ${pnl:.2f} ({pnl_pct:.2f}%)")
@@ -1815,12 +2228,160 @@ class TradingEngine:
             if self.redis:
                 try:
                     self.redis.hmset("execution:daily_stats", self.daily_stats)
+
+                    # Update frontend system status every 10 seconds
+                    current_time = time.time()
+                    last_frontend_update = getattr(
+                        self, '_last_frontend_update', 0)
+                    if current_time - last_frontend_update > 10:
+                        self._update_frontend_status(account)
+                        self._last_frontend_update = current_time
+
                 except redis.RedisError as e:
                     logger.warning(
                         f"Error storing daily stats in Redis: {str(e)}")
 
         except Exception as e:
             logger.error(f"Error updating daily stats: {str(e)}")
+
+    def _update_frontend_status(self, account=None):
+        """Update frontend with system status information"""
+        try:
+            if not self.redis:
+                return
+
+            # Get account info if not provided
+            if not account:
+                account = self._get_account_info()
+
+            # Create system status data
+            system_status = {
+                "timestamp": time.time(),
+                "running": self.running,
+                "active_positions": len(self.active_positions),
+                "pending_orders": len(self.pending_orders),
+                "day_trading_candidates": len(self.day_trading_candidates),
+                "daily_stats": self.daily_stats,
+                "account": account if account else {},
+                "system_info": {
+                    "threads_active": len([t for t in self.threads if t.is_alive()]),
+                    "tasks_active": len([t for t in self.tasks.values() if not t.done()]),
+                    "uptime_seconds": time.time() - self.daily_stats.get('start_time', time.time())
+                }
+            }
+
+            # Add GPU information if available
+            if self.gpu_initialized and CUPY_AVAILABLE:
+                try:
+                    mem_info = cp.cuda.runtime.memGetInfo()
+                    free, total = mem_info
+                    used = total - free
+
+                    # Add GPU memory info to system status
+                    system_status["gpu_info"] = {
+                        "memory_used_mb": used / (1024 * 1024),
+                        "memory_free_mb": free / (1024 * 1024),
+                        "memory_total_mb": total / (1024 * 1024),
+                        "memory_percent": (used / total) * 100,
+                        "gpu_initialized": self.gpu_initialized
+                    }
+
+                    # Send memory update to frontend
+                    send_gpu_memory_update(used, free, total)
+
+                    # Send warning if memory usage is high
+                    if (used / total) > 0.8:
+                        send_gpu_memory_warning(used, free, total)
+
+                    # Send critical alert if memory usage is very high
+                    if (used / total) > 0.95:
+                        send_gpu_memory_critical_alert(used, free, total)
+
+                except Exception as e:
+                    logger.warning(f"Error getting GPU memory info: {e}")
+                    system_status["gpu_info"] = {
+                        "error": str(e),
+                        "gpu_initialized": self.gpu_initialized
+                    }
+            elif self.use_gpu:
+                system_status["gpu_info"] = {
+                    "gpu_initialized": self.gpu_initialized,
+                    "message": "GPU initialization attempted but failed"
+                }
+            else:
+                system_status["gpu_info"] = {
+                    "gpu_initialized": False,
+                    "message": "GPU not enabled"
+                }
+
+            # Store in Redis for frontend access
+            self.redis.set("frontend:system:status", json.dumps(system_status))
+
+            # Publish system status update for real-time frontend updates
+            self.redis.publish("frontend:events", json.dumps({
+                "type": "system_status",
+                "data": system_status
+            }))
+
+            # Store portfolio data
+            portfolio_data = {
+                "total_equity": float(account['equity']) if account else 0,
+                "cash": float(account['cash']) if account else 0,
+                "buying_power": float(account['buying_power']) if account else 0,
+                "total_pnl": self.daily_stats['total_pnl'],
+                "profitable_trades": self.daily_stats['profitable_trades'],
+                "trades_executed": self.daily_stats['trades_executed'],
+                "current_exposure": self.daily_stats['current_exposure'],
+                "max_drawdown": self.daily_stats['max_drawdown'],
+                "timestamp": time.time()
+            }
+
+            # Store portfolio data for frontend
+            self.redis.set("frontend:portfolio:latest",
+                           json.dumps(portfolio_data))
+
+            # Publish portfolio update for real-time frontend updates
+            self.redis.publish("frontend:events", json.dumps({
+                "type": "portfolio_update",
+                "data": portfolio_data
+            }))
+
+            # Add to portfolio history with timestamp (capped at 500 entries)
+            self.redis.lpush("frontend:portfolio:history",
+                             json.dumps(portfolio_data))
+            self.redis.ltrim("frontend:portfolio:history", 0, 499)
+
+            # Store equity curve data point
+            if account:
+                equity_point = {
+                    "timestamp": time.time(),
+                    "value": float(account['equity'])
+                }
+                self.redis.lpush(
+                    "frontend:portfolio:equity_curve", json.dumps(equity_point))
+                # Keep 500 points
+                self.redis.ltrim("frontend:portfolio:equity_curve", 0, 499)
+
+                # Publish equity curve update
+                self.redis.publish("frontend:events", json.dumps({
+                    "type": "equity_update",
+                    "data": equity_point
+                }))
+
+            # Publish active positions update
+            if self.active_positions:
+                self.redis.publish("frontend:events", json.dumps({
+                    "type": "positions_update",
+                    "data": {
+                        "active_positions": len(self.active_positions),
+                        "positions": list(self.active_positions.values())
+                    }
+                }))
+
+            logger.debug("Frontend status updated")
+
+        except Exception as e:
+            logger.error(f"Error updating frontend status: {str(e)}")
 
     def _get_account_info(self):
         """Get account information"""
@@ -1841,6 +2402,62 @@ class TradingEngine:
         """Get account equity"""
         account = self._get_account_info()
         return float(account['equity']) if account else 0
+
+    def _send_frontend_notification(self, message, level="info", category="system", details=None):
+        """
+        Send a notification to the frontend
+
+        Args:
+            message: Notification message
+            level: Notification level (info, warning, error, success)
+            category: Notification category (system, trade, pattern, etc.)
+            details: Optional additional details for the notification
+        """
+        try:
+            if not self.redis:
+                return
+
+            notification = {
+                "type": category,
+                "message": message,
+                "level": level,
+                "timestamp": time.time(),
+                "source": "trading_engine"
+            }
+
+            # Add details if provided
+            if details:
+                notification["details"] = details
+
+            # Store in Redis for frontend access
+            self.redis.lpush("frontend:notifications",
+                             json.dumps(notification))
+            # Keep last 100 notifications
+            self.redis.ltrim("frontend:notifications", 0, 99)
+
+            # Also store in category-specific list if appropriate
+            if category in ["trade", "trade_exit", "system_startup", "system_shutdown", "opportunity", "market_status"]:
+                self.redis.lpush(
+                    f"frontend:{category}", json.dumps(notification))
+                # Keep last 50 category-specific items
+                self.redis.ltrim(f"frontend:{category}", 0, 49)
+
+            # Publish event for real-time updates to frontend
+            self.redis.publish("frontend:events", json.dumps({
+                "type": "notification",
+                "data": notification
+            }))
+
+            # Log the notification
+            if level == "error":
+                logger.error(f"Frontend notification: {message}")
+            elif level == "warning":
+                logger.warning(f"Frontend notification: {message}")
+            else:
+                logger.info(f"Frontend notification: {message}")
+
+        except Exception as e:
+            logger.error(f"Error sending frontend notification: {str(e)}")
 
     #
     # Day Trading Methods from day_trading_system.py
@@ -2475,7 +3092,7 @@ class TradingEngine:
                 self.day_trading_candidates.add(ticker)
 
                 # Publish new position alert
-                self.redis.publish("position_updates", json.dumps({
+                position_data = {
                     "type": "new_position",
                     "ticker": ticker,
                     "price": current_price,
@@ -2484,8 +3101,19 @@ class TradingEngine:
                     "stop_price": stop_price,
                     "target_price": target_price,
                     "risk_reward": risk_reward,
-                    "entry_reason": "real_time_alert"
-                }))
+                    "entry_reason": "real_time_alert",
+                    "timestamp": time.time()
+                }
+                self.redis.publish("position_updates",
+                                   json.dumps(position_data))
+
+                # Store for frontend access
+                self.redis.lpush("frontend:positions:history",
+                                 json.dumps(position_data))
+                self.redis.ltrim("frontend:positions:history",
+                                 0, 99)  # Keep last 100 entries
+                self.redis.set("frontend:positions:latest",
+                               json.dumps(position_data))
 
                 # Update available capital
                 available_capital -= position_value
@@ -2542,6 +3170,30 @@ class TradingEngine:
                     await asyncio.sleep(15)
                     continue
 
+                # Send notification to frontend about peak detection start
+                self._send_frontend_notification(
+                    f"Starting peak detection for {ticker}",
+                    level="info",
+                    category="system_gpu",
+                    details={"operation": "peak_detection_start",
+                             "ticker": ticker}
+                )
+
+                # Get GPU memory info before peak detection
+                if self.gpu_initialized and CUPY_AVAILABLE:
+                    try:
+                        mem_info = cp.cuda.runtime.memGetInfo()
+                        free, total = mem_info
+                        used = total - free
+                        send_gpu_memory_update(used, free, total)
+
+                        # Log memory usage before peak detection
+                        logger.debug(
+                            f"GPU memory before peak detection for {ticker}: {used/(1024**2):.2f}MB used, {free/(1024**2):.2f}MB free")
+                    except Exception as e:
+                        logger.warning(
+                            f"Error getting GPU memory info before peak detection: {e}")
+
                 # Detect peaks and troughs
                 peaks, troughs = self._detect_peaks_and_troughs(price_data)
 
@@ -2553,8 +3205,26 @@ class TradingEngine:
                 if patterns:
                     self._store_patterns(ticker, patterns)
 
+                    # Send notification to frontend about patterns found
+                    self._send_frontend_notification(
+                        f"Found {len(patterns)} patterns for {ticker}",
+                        level="success",
+                        category="pattern_detection",
+                        details={"ticker": ticker,
+                                 "pattern_count": len(patterns)}
+                    )
+
             except Exception as e:
                 logger.error(f"Error monitoring peaks for {ticker}: {e}")
+
+                # Send error notification to frontend
+                self._send_frontend_notification(
+                    f"Error in peak detection for {ticker}: {str(e)}",
+                    level="error",
+                    category="system_gpu",
+                    details={"operation": "peak_detection_error",
+                             "ticker": ticker}
+                )
 
             # Wait before next check
             await asyncio.sleep(60)  # Check every minute
@@ -2655,9 +3325,32 @@ class TradingEngine:
                                 if not trough_indices or i - trough_indices[-1] >= MIN_PEAK_DISTANCE:
                                     trough_indices.append(i)
 
+                    # Get GPU memory info and send to frontend
+                    if CUPY_AVAILABLE:
+                        try:
+                            mem_info = cp.cuda.runtime.memGetInfo()
+                            free, total = mem_info
+                            used = total - free
+                            send_gpu_memory_update(used, free, total)
+
+                            # Log memory usage after peak detection
+                            logger.debug(
+                                f"GPU memory after peak detection: {used/(1024**2):.2f}MB used, {free/(1024**2):.2f}MB free")
+                        except Exception as e:
+                            logger.warning(
+                                f"Error getting GPU memory info after peak detection: {e}")
+
                     # Clear GPU memory
                     if self.gpu_memory_manager:
                         self.gpu_memory_manager.request_cleanup()
+
+                        # Send notification to frontend about memory cleanup
+                        self._send_frontend_notification(
+                            "GPU memory cleanup requested after peak detection",
+                            level="info",
+                            category="system_gpu",
+                            details={"operation": "peak_detection"}
+                        )
 
                     return peak_indices, trough_indices
 
@@ -2992,12 +3685,48 @@ class TradingEngine:
 
             # Publish pattern alert
             for pattern in patterns:
-                self.redis.publish("pattern_alerts", json.dumps({
+                pattern_alert = {
                     "ticker": ticker,
                     "pattern": pattern['pattern'],
                     "confidence": pattern['confidence'],
                     "timestamp": now
+                }
+                self.redis.publish("pattern_alerts", json.dumps(pattern_alert))
+
+                # Store for frontend access
+                self.redis.lpush("frontend:patterns:alerts",
+                                 json.dumps(pattern_alert))
+                self.redis.ltrim("frontend:patterns:alerts",
+                                 0, 99)  # Keep last 100 entries
+
+                # Publish pattern alert for real-time frontend updates
+                self.redis.publish("frontend:events", json.dumps({
+                    "type": "pattern_alert",
+                    "data": pattern_alert
                 }))
+
+                # Store pattern details for frontend
+                frontend_pattern = {
+                    "ticker": ticker,
+                    "pattern": pattern['pattern'],
+                    "confidence": pattern['confidence'],
+                    "timestamp": now,
+                    "details": pattern
+                }
+                self.redis.hset("frontend:patterns:details", f"{ticker}:{pattern['pattern']}:{now}",
+                                json.dumps(frontend_pattern))
+
+                # Send notification to frontend
+                pattern_name = pattern['pattern'].replace('_', ' ').title()
+                confidence_pct = int(pattern['confidence'] * 100)
+                self._send_frontend_notification(
+                    f"Pattern detected: {pattern_name} on {ticker} (Confidence: {confidence_pct}%)",
+                    level="info",
+                    category="pattern"
+                )
+
+                # Set expiry for pattern details (24 hours)
+                self.redis.expire("frontend:patterns:details", 86400)
 
                 # Generate trading signal if confidence is high enough
                 if pattern['confidence'] >= 0.7:
@@ -3071,6 +3800,16 @@ class TradingEngine:
 
             # Publish to execution system
             self.redis.publish("execution:new_signal", json.dumps(signal))
+
+            # Send notification to frontend
+            pattern_name = pattern['pattern'].replace('_', ' ').title()
+            direction_text = "Buy" if direction == "long" else "Sell"
+            self._send_frontend_notification(
+                f"Trading signal: {direction_text} {ticker} based on {pattern_name} pattern",
+                level="info",
+                category="trading_signal"
+            )
+
             logger.info(
                 f"Generated {direction} signal for {ticker} based on {pattern['pattern']} pattern")
 

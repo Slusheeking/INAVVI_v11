@@ -12,4 +12,4 @@ This package provides monitoring and observability for the trading system:
 
 from .monitoring_system import MonitoringSystem, SlackNotifier
 
-__all__ = ['MonitoringSystem', 'SlackNotifier']
+__all__ = ["MonitoringSystem", "SlackNotifier"]
