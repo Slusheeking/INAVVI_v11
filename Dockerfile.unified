@@ -200,6 +200,9 @@ autorestart=true
 stderr_logfile=/var/log/redis/redis-server.err.log
 stdout_logfile=/var/log/redis/redis-server.out.log
 priority=10
+# Ensure Redis data directory exists and has proper permissions
+startsecs=5
+startretries=3
 
 [program:prometheus]
 command=/usr/bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
@@ -247,7 +250,7 @@ autorestart=true
 stderr_logfile=/var/log/frontend.err.log
 stdout_logfile=/var/log/frontend.out.log
 priority=60
-environment=PYTHONPATH="/app/project",FLASK_APP="/app/project/frontend/app.py",FLASK_ENV="development",FLASK_DEBUG="1",FLASK_RUN_EXTRA_FILES="/app/project/frontend/templates/*",FRONTEND_WEBSOCKET_ENABLED="true",FRONTEND_REALTIME_UPDATES="true"
+environment=PYTHONPATH="/app/project",FLASK_APP="/app/project/frontend/app.py",FLASK_ENV="development",FLASK_DEBUG="1",FLASK_RUN_PORT="5000",FLASK_RUN_EXTRA_FILES="/app/project/frontend/templates/*",FRONTEND_WEBSOCKET_ENABLED="true",FRONTEND_REALTIME_UPDATES="true"
 stopwaitsecs=30
 stopsignal=TERM
 stopasgroup=true
@@ -274,6 +277,8 @@ RUN mkdir -p /var/log/supervisor && \
     mkdir -p /var/log/prometheus && \
     mkdir -p /var/run/redis && \
     mkdir -p /data && \
+    mkdir -p /var/lib/redis && \
+    mkdir -p /app/data/redis && \
     touch /var/log/redis/redis-server.err.log && \
     touch /var/log/redis/redis-server.out.log && \
     touch /var/log/prometheus.err.log && \
@@ -299,13 +304,25 @@ RUN mkdir -p /var/log/supervisor && \
     chown -R root:root /var/log/redis && \
     chown -R root:root /var/run/redis && \
     chown -R root:root /data && \
+    chown -R root:root /var/lib/redis && \
+    chown -R root:root /app/data/redis && \
     chmod 755 /var/run/redis && \
-    chmod 755 /data
+    chmod 755 /data && \
+    chmod 755 /var/lib/redis && \
+    chmod 755 /app/data/redis
 
 # Create startup script for initializing the system
 COPY <<EOF /app/startup.sh
 #!/bin/bash
 set -e
+
+# Ensure Redis data directories exist with proper permissions
+mkdir -p /data
+mkdir -p /var/lib/redis
+mkdir -p /app/data/redis
+chmod 755 /data
+chmod 755 /var/lib/redis
+chmod 755 /app/data/redis
 
 # Wait for Redis to be ready
 echo "Waiting for Redis to be ready..."

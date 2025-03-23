@@ -217,6 +217,53 @@ Made several key architectural decisions for the production deployment of the tr
   - Better diagnostics for API connectivity problems
   - Reduced risk of runtime failures due to invalid API keys
 
+[2025-03-23 04:56:30] - **CI/CD Pipeline Enhancement**
+- **Decision**: Enhance the CI/CD pipeline with frontend and monitoring system integration.
+- **Rationale**: The existing CI/CD pipeline only tested the core backend components, leaving frontend and monitoring systems untested before deployment, which could lead to deployment failures or monitoring gaps.
+- **Implementation**:
+  - Added a frontend-test job to verify frontend setup and templates
+  - Added a monitoring-test job to verify monitoring system functionality
+  - Updated the build job to depend on all test jobs
+  - Added frontend and monitoring verification steps to deployment jobs
+  - Ensured proper testing of Redis configuration
+- **Implications**:
+  - More comprehensive testing before deployment
+  - Early detection of frontend and monitoring issues
+  - Improved reliability of the deployment process
+  - Better verification of system health after deployment
+  - Reduced risk of deploying a system with non-functional components
+
+[2025-03-23 04:52:40] - **Frontend Port Reversion**
+- **Decision**: Revert the frontend server port from 3005 back to 5000.
+- **Rationale**: After evaluation, it was determined that port 5000 is the standard port for Flask applications and is already properly configured in the Docker setup.
+- **Implementation**:
+  - Updated app.py to use port 5000 instead of 3005
+  - Changed FLASK_RUN_PORT environment variable in start_frontend.sh to 5000
+  - Updated docker-compose.unified.yml to expose port 5000
+  - Added explicit FLASK_RUN_PORT="5000" in Dockerfile.unified
+  - Updated README.md and test_frontend_setup.py to reflect the port change
+- **Implications**:
+  - Maintains consistency with standard Flask port conventions
+  - Ensures compatibility with existing documentation and tooling
+  - Simplifies configuration by using the default port
+  - Ensures all components reference the same port number
+
+[2025-03-23 04:39:00] - **Frontend Virtual Environment Setup**
+- **Decision**: Implement proper virtual environment setup for the frontend component.
+- **Rationale**: The frontend was experiencing pip installation errors and module not found issues due to using system-wide pip installation instead of a dedicated virtual environment.
+- **Implementation**:
+  - Created a requirements.txt file for the frontend with all necessary dependencies
+  - Modified start_frontend.sh to create and use a Python virtual environment
+  - Updated package installation to use the requirements.txt file
+  - Added proper virtual environment activation and deactivation
+  - Improved error handling for package installation
+- **Implications**:
+  - Resolved pip installation assertion errors
+  - Fixed "No module named flask" errors when starting the frontend
+  - Isolated frontend dependencies from system Python packages
+  - Improved reproducibility of the frontend environment
+  - Enhanced maintainability by centralizing dependency management in requirements.txt
+
 [2025-03-22 22:54:07] - **TensorRT Installation Process Fix**
 - **Decision**: Fix the TensorRT installation process in the Docker container.
 - **Rationale**: The container build was failing because nvidia-tensorrt requires a special installation process using nvidia-pyindex first.

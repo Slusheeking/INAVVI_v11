@@ -49,6 +49,34 @@ Next steps:
 
 ## Recent Changes
 
+[2025-03-23 05:03:00] - Fixed CI/CD pipeline secret references:
+- Updated Docker Hub credential secret names (DOCKER_USERNAME, DOCKER_TOKEN)
+- Updated staging server credential secret names (STAGING_SERVER_HOST, STAGING_SERVER_USER, STAGING_SERVER_KEY)
+- Updated production server credential secret names (PRODUCTION_SERVER_HOST, PRODUCTION_SERVER_USER, PRODUCTION_SERVER_KEY)
+- Updated API key secret names to use standardized naming convention (API_KEY_POLYGON, API_KEY_ALPACA, etc.)
+- Updated Redis password secret name (REDIS_AUTH_PASSWORD)
+
+[2025-03-23 04:56:10] - Enhanced CI/CD pipeline with frontend and monitoring integration:
+- Added frontend-test job to verify frontend setup and templates
+- Added monitoring-test job to verify monitoring system functionality
+- Updated build job to depend on all test jobs
+- Added frontend and monitoring verification to deployment steps
+- Ensured proper testing of all system components before deployment
+
+[2025-03-23 04:52:30] - Reverted frontend port back to 5000:
+- Updated app.py to use port 5000 instead of 3005
+- Changed FLASK_RUN_PORT environment variable in start_frontend.sh to 5000
+- Updated docker-compose.unified.yml to expose port 5000
+- Updated Dockerfile.unified to explicitly set FLASK_RUN_PORT="5000"
+- Updated README.md and test_frontend_setup.py to reflect the port change
+
+[2025-03-23 04:40:30] - Fixed frontend environment setup:
+- Created requirements.txt file for frontend dependencies
+- Updated start_frontend.sh to use Python virtual environment
+- Fixed pip installation assertion errors
+- Resolved "No module named flask" error
+- Documented changes in decisionLog.md and progress.md
+
 [2025-03-22 23:34:00] - Fixed component startup issues:
 - Manually started Redis server on port 6380 with proper authentication
 - Started Prometheus with correct configuration file path
