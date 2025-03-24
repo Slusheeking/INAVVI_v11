@@ -5,6 +5,23 @@
 # Set up environment
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
+# Parse command line arguments
+DOCKER_MODE=false
+REBUILD=false
+FORCE_FLAG=""
+
+for arg in "$@"; do
+    if [ "$arg" == "--docker" ]; then
+        DOCKER_MODE=true
+    fi
+    if [ "$arg" == "--rebuild" ]; then
+        REBUILD=true
+    fi
+    if [ "$arg" == "--force" ]; then
+        FORCE_FLAG="--force"
+    fi
+done
+
 # Set frontend environment variables
 export FLASK_APP=frontend/app.py
 export FLASK_ENV=development
@@ -18,6 +35,8 @@ export REDIS_NOTIFY_KEYSPACE_EVENTS=Kxe
 mkdir -p logs
 mkdir -p logs/frontend
 mkdir -p logs/events
+mkdir -p data
+mkdir -p models
 
 # Load environment variables from .env if it exists
 if [ -f .env ]; then
@@ -26,6 +45,75 @@ if [ -f .env ]; then
     source .env
     set +a
 fi
+
+# Docker mode
+if [ "$DOCKER_MODE" = true ]; then
+    echo "Starting trading system in Docker mode..."
+    
+    # Check if container is already running
+    if docker ps | grep -q trading-system; then
+        if [ "$REBUILD" = true ]; then
+            echo "Container is already running. Stopping it for rebuild..."
+            ./stop.sh --docker $FORCE_FLAG
+        else
+            echo "Container is already running. Use --rebuild to force rebuild or use stop.sh first."
+            exit 1
+        fi
+    fi
+    
+    # Rebuild if requested
+    if [ "$REBUILD" = true ]; then
+        echo "Rebuilding container..."
+        ./rebuild_container.sh
+    else
+        # Just start the container if it's not running
+        echo "Starting container without rebuild..."
+        docker-compose -f docker-compose.unified.yml up -d
+        
+        # Wait for container to be ready
+        echo "Waiting for container to be ready..."
+        max_wait=120
+        wait_interval=5
+        elapsed=0
+        
+        while [ $elapsed -lt $max_wait ]; do
+            # Check if container is running
+            if ! docker ps | grep -q trading-system; then
+                echo "Container failed to start. Checking logs..."
+                docker-compose -f docker-compose.unified.yml logs --tail=50
+                echo "Failed to start container. Exiting."
+                exit 1
+            fi
+            
+            # Check container health status
+            health_status=$(docker inspect --format='{{.State.Health.Status}}' trading-system 2>/dev/null)
+            
+            if [ "$health_status" = "healthy" ]; then
+                echo "Container is healthy and ready!"
+                break
+            fi
+            
+            echo "Waiting for container to be healthy... ($elapsed/$max_wait seconds)"
+            sleep $wait_interval
+            elapsed=$((elapsed + wait_interval))
+        done
+        
+        if [ $elapsed -ge $max_wait ]; then
+            echo "Timed out waiting for container to be healthy, but continuing anyway..."
+            echo "Container status: $health_status"
+        fi
+    fi
+    
+    echo "Docker container is running. Access the frontend at http://localhost:5000"
+    echo "Jupyter Lab is available at http://localhost:8888"
+    echo "Prometheus is available at http://localhost:9090"
+    
+    # Exit since we're running in Docker mode
+    exit 0
+fi
+
+# Local mode (non-Docker) continues below
+echo "Starting trading system in local mode..."
 
 # Check if Redis is running
 redis-cli ping > /dev/null 2>&1

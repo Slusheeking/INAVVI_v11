@@ -517,17 +517,9 @@
                 </div>
                 <div class="card-content">
                     <h4 style="margin-bottom: 10px; color: var(--text-secondary);">System Components & Connections</h4>
-                    <div id="components-container">
-                        <div id="components-view" class="component-list">
-                            <li>Loading component status...</li>
-                        </div>
-                        <div id="infrastructure-view" class="component-list" style="display: none;">
-                            <li>Loading infrastructure components...</li>
-                        </div>
-                        <div id="api-connections-view" class="component-list" style="display: none;">
-                            <li>Loading API connections...</li>
-                        </div>
-                    </div>
+                    <ul id="components" class="component-list">
+                        <li>Loading component status...</li>
+                    </ul>
                     <div class="refresh-time">Last updated: <span id="api-last-updated">-</span></div>
                 </div>
             </div>
@@ -558,20 +550,6 @@
                             <div class="stat-label">Current Exposure</div>
                         </div>
                     </div>
-                    <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--bg-tertiary);">
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                            <span>Data Source:</span>
-                            <span id="portfolio-source" class="badge info">Alpaca API</span>
-                        </div>
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                            <span>Buying Power:</span>
-                            <span id="buying-power">$0.00</span>
-                        </div>
-                        <div style="display: flex; justify-content: space-between;">
-                            <span>Account Status:</span>
-                            <span id="account-status" class="badge success">ACTIVE</span>
-                        </div>
-                    </div>
                     <div class="refresh-time">Last updated: <span id="portfolio-last-updated">-</span></div>
                 </div>
             </div>
@@ -587,10 +565,6 @@
                     <ul id="positions" class="position-list">
                         <li>No active positions</li>
                     </ul>
-                    <div class="refresh-time">
-                        Data source: <span class="badge info">Alpaca API</span> |
-                        Update frequency: <span class="badge success">1 minute</span>
-                    </div>
                 </div>
             </div>
             
@@ -667,9 +641,6 @@
             fetchPortfolio();
             fetchPositions();
             fetchPatterns();
-            
-            // Start view cycling
-            startViewCycling();
         });
         
         socket.on('disconnect', function() {
@@ -685,9 +656,6 @@
             
             // Start polling if disconnected
             startPolling();
-            
-            // Stop view cycling
-            clearInterval(viewCycleTimer);
         });
         
         // Handle system status updates
@@ -800,72 +768,65 @@
             }
         }
         
-        // Initialize view cycling
-        let currentView = 'components';
-        const viewCycleInterval = 5000; // 5 seconds
-        let viewCycleTimer;
-        
-        // Start view cycling
-        function startViewCycling() {
-            viewCycleTimer = setInterval(toggleComponentsView, viewCycleInterval);
-        }
-        
-        // Toggle between components, infrastructure, and API connections views
-        function toggleComponentsView() {
-            const componentsView = document.getElementById('components-view');
-            const infrastructureView = document.getElementById('infrastructure-view');
-            const apiConnectionsView = document.getElementById('api-connections-view');
-            
-            // Hide all views first
-            componentsView.style.display = 'none';
-            infrastructureView.style.display = 'none';
-            apiConnectionsView.style.display = 'none';
-            
-            // Show the next view based on current view
-            if (currentView === 'components') {
-                infrastructureView.style.display = 'block';
-                currentView = 'infrastructure';
-            } else if (currentView === 'infrastructure') {
-                apiConnectionsView.style.display = 'block';
-                currentView = 'api';
-            } else {
-                componentsView.style.display = 'block';
-                currentView = 'components';
-            }
-        }
-        
-        // Store component and API data globally to preserve all views
-        let storedComponentsData = {};
-        let storedApiStatusesData = {};
-        
         // Update components
         function updateComponents(data) {
-            const componentsViewElement = document.getElementById('components-view');
-            const infrastructureViewElement = document.getElementById('infrastructure-view');
-            const apiConnectionsViewElement = document.getElementById('api-connections-view');
-            
-            // Update stored data with new data
-            if (data.components) {
-                storedComponentsData = data.components;
-            }
-            
-            if (data.api_statuses) {
-                storedApiStatusesData = data.api_statuses;
-            }
-            
-            // Now generate HTML using both stored data sources
-            let componentsHtml = '';
-            let infrastructureHtml = '';
-            let apiConnectionsHtml = '';
-            
-            // Add system components from stored data
-            if (Object.keys(storedComponentsData).length > 0) {
-                for (const [name, status] of Object.entries(storedComponentsData)) {
-                    // Skip infrastructure components (Redis, Prometheus, TensorFlow)
-                    if (name.toLowerCase() !== 'redis' &&
-                        name.toLowerCase() !== 'prometheus' &&
-                        name.toLowerCase() !== 'tensorflow') {
-                        
+            const componentsElement = document.getElementById('components');
+            if (data && (data.components || data.api_statuses)) {
+                let componentsHtml = '';
+                
+                // Add system components
+                if (data.components) {
+                    componentsHtml += `<h5 style="margin-top: 10px; margin-bottom: 10px; color: var(--text-secondary);">System Components</h5>`;
+                    for (const [name, status] of Object.entries(data.components)) {
+                        if (name !== 'redis' && name !== 'prometheus') { // Skip Redis and Prometheus as they'll be in API connections
+                            const componentClass = status === 'running' ? 'status-running' :
+                                                 status === 'stopped' ? 'status-stopped' : 'status-unknown';
+                            componentsHtml += `
+                                <li class="component-item">
+                                    <div class="component-name">${name}</div>
+                                    <div class="status-indicator ${componentClass}"></div>
+                                    <span>${status}</span>
+                                </li>
+                            `;
+                        }
+                    }
+                }
+                
+                // Add API connections section header
+                componentsHtml += `<h5 style="margin-top: 15px; margin-bottom: 10px; color: var(--text-secondary);">API Connections</h5>`;
+                
+                // Add Redis and Prometheus to API connections
+                if (data.components) {
+                    if (data.components['redis']) {
+                        const status = data.components['redis'];
+                        const componentClass = status === 'running' ? 'status-running' :
+                                             status === 'stopped' ? 'status-stopped' : 'status-unknown';
+                        componentsHtml += `
+                            <li class="component-item">
+                                <div class="component-name">Redis</div>
+                                <div class="status-indicator ${componentClass}"></div>
+                                <span>${status}</span>
+                            </li>
+                        `;
+                    }
+                    
+                    if (data.components['prometheus']) {
+                        const status = data.components['prometheus'];
+                        const componentClass = status === 'running' ? 'status-running' :
+                                             status === 'stopped' ? 'status-stopped' : 'status-unknown';
+                        componentsHtml += `
+                            <li class="component-item">
+                                <div class="component-name">Prometheus</div>
+                                <div class="status-indicator ${componentClass}"></div>
+                                <span>${status}</span>
+                            </li>
+                        `;
+                    }
+                }
+                
+                // Add API connections
+                if (data.api_statuses) {
+                    for (const [name, status] of Object.entries(data.api_statuses)) {
                         const componentClass = status === 'running' ? 'status-running' :
                                              status === 'stopped' ? 'status-stopped' : 'status-unknown';
                         componentsHtml += `
@@ -877,113 +838,9 @@
                         `;
                     }
                 }
-            }
-            
-            // Add ML Engine and Monitor System if they don't exist yet
-            if (!Object.keys(storedComponentsData).some(key => key.toLowerCase().includes('ml engine'))) {
-                componentsHtml += `
-                    <li class="component-item">
-                        <div class="component-name">ML Engine</div>
-                        <div class="status-indicator status-unknown"></div>
-                        <span>unknown</span>
-                    </li>
-                `;
-            }
-            
-            if (!Object.keys(storedComponentsData).some(key => key.toLowerCase().includes('monitor') ||
-                                                      key.toLowerCase().includes('monitoring'))) {
-                componentsHtml += `
-                    <li class="component-item">
-                        <div class="component-name">Monitoring System</div>
-                        <div class="status-indicator status-unknown"></div>
-                        <span>unknown</span>
-                    </li>
-                `;
-            }
-            
-            // Add infrastructure components (Redis, Prometheus, TensorFlow)
-            if (Object.keys(storedComponentsData).length > 0) {
-                // Check for Redis (case insensitive)
-                const redisKey = Object.keys(storedComponentsData).find(key =>
-                    key.toLowerCase() === 'redis');
-                if (redisKey) {
-                    const status = storedComponentsData[redisKey];
-                    const componentClass = status === 'running' ? 'status-running' :
-                                         status === 'stopped' ? 'status-stopped' : 'status-unknown';
-                    infrastructureHtml += `
-                        <li class="component-item">
-                            <div class="component-name">Redis</div>
-                            <div class="status-indicator ${componentClass}"></div>
-                            <span>${status}</span>
-                        </li>
-                    `;
-                }
                 
-                // Check for Prometheus (case insensitive)
-                const prometheusKey = Object.keys(storedComponentsData).find(key =>
-                    key.toLowerCase() === 'prometheus');
-                if (prometheusKey) {
-                    const status = storedComponentsData[prometheusKey];
-                    const componentClass = status === 'running' ? 'status-running' :
-                                         status === 'stopped' ? 'status-stopped' : 'status-unknown';
-                    infrastructureHtml += `
-                        <li class="component-item">
-                            <div class="component-name">Prometheus</div>
-                            <div class="status-indicator ${componentClass}"></div>
-                            <span>${status}</span>
-                        </li>
-                    `;
-                }
-                
-                // Check for TensorFlow (case insensitive)
-                const tensorflowKey = Object.keys(storedComponentsData).find(key =>
-                    key.toLowerCase() === 'tensorflow');
-                if (tensorflowKey) {
-                    const status = storedComponentsData[tensorflowKey];
-                    const componentClass = status === 'running' ? 'status-running' :
-                                         status === 'stopped' ? 'status-stopped' : 'status-unknown';
-                    infrastructureHtml += `
-                        <li class="component-item">
-                            <div class="component-name">TensorFlow</div>
-                            <div class="status-indicator ${componentClass}"></div>
-                            <span>${status}</span>
-                        </li>
-                    `;
-                }
+                componentsElement.innerHTML = componentsHtml;
             }
-            
-            // Add API connections from stored API data
-            if (Object.keys(storedApiStatusesData).length > 0) {
-                for (const [name, status] of Object.entries(storedApiStatusesData)) {
-                    const componentClass = status === 'running' ? 'status-running' :
-                                         status === 'stopped' ? 'status-stopped' : 'status-unknown';
-                    apiConnectionsHtml += `
-                        <li class="component-item">
-                            <div class="component-name">${name}</div>
-                            <div class="status-indicator ${componentClass}"></div>
-                            <span>${status}</span>
-                        </li>
-                    `;
-                }
-            }
-            
-            // Set default messages if no data
-            if (componentsHtml === '') {
-                componentsHtml = '<li>No system components found</li>';
-            }
-            
-            if (infrastructureHtml === '') {
-                infrastructureHtml = '<li>No infrastructure components found</li>';
-            }
-            
-            if (apiConnectionsHtml === '') {
-                apiConnectionsHtml = '<li>No API connections found</li>';
-            }
-            
-            // Update the views
-            componentsViewElement.innerHTML = componentsHtml;
-            infrastructureViewElement.innerHTML = infrastructureHtml;
-            apiConnectionsViewElement.innerHTML = apiConnectionsHtml;
         }
         // Update GPU status
         function updateGpuStatus(data) {
@@ -1105,34 +962,9 @@
                     document.getElementById('current-exposure').textContent = `$${parseFloat(data.current_exposure).toFixed(2)}`;
                 }
                 
-                // Update buying power if available
-                if (data.buying_power !== undefined) {
-                    document.getElementById('buying-power').textContent = `$${parseFloat(data.buying_power).toFixed(2)}`;
-                }
-                
-                // Update account status if available
-                if (data.account_status !== undefined) {
-                    const statusElement = document.getElementById('account-status');
-                    statusElement.textContent = data.account_status;
-                    statusElement.className = data.account_status === 'ACTIVE' ? 'badge success' : 'badge warning';
-                }
-                
                 // Update last updated time
                 const lastUpdated = new Date(data.timestamp * 1000).toLocaleTimeString();
                 document.getElementById('portfolio-last-updated').textContent = lastUpdated;
-                
-                // Add Alpaca to API connections if not already there
-                const apiConnectionsView = document.getElementById('api-connections-view');
-                if (apiConnectionsView && !apiConnectionsView.innerHTML.includes('Alpaca')) {
-                    const alpacaItem = document.createElement('li');
-                    alpacaItem.className = 'component-item';
-                    alpacaItem.innerHTML = `
-                        <div class="component-name">Alpaca</div>
-                        <div class="status-indicator status-running"></div>
-                        <span>connected</span>
-                    `;
-                    apiConnectionsView.appendChild(alpacaItem);
-                }
             }
         }
         

@@ -1,0 +1,74 @@
+// Update components
+function updateComponents(data) {
+    const componentsElement = document.getElementById('components');
+    if (data && (data.components || data.api_statuses)) {
+        let componentsHtml = '';
+        
+        // Add system components
+        if (data.components) {
+            componentsHtml += `<h5 style="margin-top: 10px; margin-bottom: 10px; color: var(--text-secondary);">System Components</h5>`;
+            for (const [name, status] of Object.entries(data.components)) {
+                if (name !== 'redis' && name !== 'prometheus') { // Skip Redis and Prometheus as they'll be in API connections
+                    const componentClass = status === 'running' ? 'status-running' :
+                                         status === 'stopped' ? 'status-stopped' : 'status-unknown';
+                    componentsHtml += `
+                        <li class="component-item">
+                            <div class="component-name">${name}</div>
+                            <div class="status-indicator ${componentClass}"></div>
+                            <span>${status}</span>
+                        </li>
+                    `;
+                }
+            }
+        }
+        
+        // Add API connections section header
+        componentsHtml += `<h5 style="margin-top: 15px; margin-bottom: 10px; color: var(--text-secondary);">API Connections</h5>`;
+        
+        // Add Redis and Prometheus to API connections
+        if (data.components) {
+            if (data.components['redis']) {
+                const status = data.components['redis'];
+                const componentClass = status === 'running' ? 'status-running' :
+                                     status === 'stopped' ? 'status-stopped' : 'status-unknown';
+                componentsHtml += `
+                    <li class="component-item">
+                        <div class="component-name">Redis</div>
+                        <div class="status-indicator ${componentClass}"></div>
+                        <span>${status}</span>
+                    </li>
+                `;
+            }
+            
+            if (data.components['prometheus']) {
+                const status = data.components['prometheus'];
+                const componentClass = status === 'running' ? 'status-running' :
+                                     status === 'stopped' ? 'status-stopped' : 'status-unknown';
+                componentsHtml += `
+                    <li class="component-item">
+                        <div class="component-name">Prometheus</div>
+                        <div class="status-indicator ${componentClass}"></div>
+                        <span>${status}</span>
+                    </li>
+                `;
+            }
+        }
+        
+        // Add API connections
+        if (data.api_statuses) {
+            for (const [name, status] of Object.entries(data.api_statuses)) {
+                const componentClass = status === 'running' ? 'status-running' :
+                                     status === 'stopped' ? 'status-stopped' : 'status-unknown';
+                componentsHtml += `
+                    <li class="component-item">
+                        <div class="component-name">${name}</div>
+                        <div class="status-indicator ${componentClass}"></div>
+                        <span>${status}</span>
+                    </li>
+                `;
+            }
+        }
+        
+        componentsElement.innerHTML = componentsHtml;
+    }
+}

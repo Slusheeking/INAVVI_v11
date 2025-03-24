@@ -1,0 +1,1 @@
+cat: /var/log/frontend.log: No such file or directory

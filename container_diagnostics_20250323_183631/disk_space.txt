@@ -1,0 +1,11 @@
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         3.9T  401G  3.5T  11% /
+tmpfs            64M     0   64M   0% /dev
+/dev/vda1       3.9T  401G  3.5T  11% /data
+tmpfs           216G  1.6M  216G   1% /dev/shm
+tmpfs           263G  192K  263G   1% /proc/driver/nvidia
+tmpfs           263G   64K  263G   1% /etc/nvidia/nvidia-application-profiles-rc.d
+tmpfs            44G   30M   44G   1% /run/nvidia-persistenced/socket
+tmpfs           263G     0  263G   0% /proc/acpi
+tmpfs           263G     0  263G   0% /proc/scsi
+tmpfs           263G     0  263G   0% /sys/firmware

@@ -15,12 +15,47 @@ fi
 
 # Check if --force flag is passed
 FORCE_FLAG=""
+DOCKER_MODE=false
 for arg in "$@"; do
     if [ "$arg" == "--force" ]; then
         FORCE_FLAG="--force"
-        break
+    fi
+    if [ "$arg" == "--docker" ]; then
+        DOCKER_MODE=true
     fi
 done
+
+# Check if Docker container is running and stop it if requested
+if [ "$DOCKER_MODE" = true ] || docker ps | grep -q trading-system; then
+    echo "Stopping Docker container..."
+    
+    # Try graceful shutdown first
+    echo "Attempting graceful shutdown of Docker container..."
+    docker exec -it trading-system bash -c "/app/shutdown.sh" || true
+    
+    # Give it a few seconds to shut down gracefully
+    sleep 5
+    
+    # Force stop if still running or if --force flag is used
+    if [ "$FORCE_FLAG" == "--force" ] || docker ps | grep -q trading-system; then
+        echo "Force stopping Docker container..."
+        docker stop -t 10 trading-system || true
+    fi
+    
+    # Remove container if it exists
+    if docker ps -a | grep -q trading-system; then
+        echo "Removing Docker container..."
+        docker rm trading-system || true
+    fi
+    
+    echo "Docker container stopped and removed."
+    
+    # If Docker mode is explicitly requested, exit after handling Docker
+    if [ "$DOCKER_MODE" = true ]; then
+        echo "Docker mode: skipping local service shutdown."
+        exit 0
+    fi
+fi
 
 # Stop the trading system
 echo "Stopping trading system..."

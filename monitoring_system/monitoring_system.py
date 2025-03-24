@@ -23,12 +23,8 @@ import threading
 import time
 import uuid
 from typing import Any
+# Environment variables are loaded from the container environment
 
-import requests
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
 
 # Import Prometheus client
 try:

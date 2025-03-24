@@ -10,10 +10,10 @@ tcp-keepalive 300
 
 # General
 daemonize no
-supervised systemd
+supervised no
 pidfile /var/run/redis/redis-server.pid
 loglevel notice
-logfile "/var/log/redis/redis-server.log"
+logfile ""
 databases 16
 
 # Snapshotting
@@ -24,7 +24,7 @@ stop-writes-on-bgsave-error no
 rdbcompression yes
 rdbchecksum yes
 dbfilename dump.rdb
-dir /data
+dir ./data
 
 # Security
 requirepass trading_system_2025
@@ -35,11 +35,11 @@ maxmemory 4gb
 maxmemory-policy allkeys-lru
 maxmemory-samples 5
 
-# Append only mode - Settings optimized for container environment
-appendonly no
+# Append only mode
+appendonly yes
 appendfilename "appendonly.aof"
-appendfsync no
-no-appendfsync-on-rewrite yes
+appendfsync everysec
+no-appendfsync-on-rewrite no
 auto-aof-rewrite-percentage 100
 auto-aof-rewrite-min-size 64mb
 aof-load-truncated yes

@@ -1,0 +1,8 @@
+USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+root           1  0.0  0.0   5632     0 ?        Ss   18:07   0:00 /bin/bash /app/startup.sh
+root         115  0.0  0.0   5824     0 ?        S    18:07   0:00 /bin/bash /etc/init.d/redis-server start
+redis        125  0.0  0.0 303552  8192 ?        Rl   18:07   0:00 /usr/bin/redis-server 0.0.0.0:6380
+root        1030  0.0  0.0   5632     0 ?        Ss   18:26   0:00 /bin/bash /app/start_frontend_direct.sh
+root        1065  0.0  0.0  41600 32768 ?        S    18:26   0:00 python -m flask run --host=0.0.0.0 --port=5000
+root        1066  0.3  0.0 303872 32768 ?        Sl   18:26   0:01 /usr/bin/python -m flask run --host=0.0.0.0 --port=5000
+root        1439  0.0  0.0   8704     0 ?        Rs   18:36   0:00 ps aux

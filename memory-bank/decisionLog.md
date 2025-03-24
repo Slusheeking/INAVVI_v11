@@ -1,3 +1,20 @@
+[2025-03-23 18:29:30] - **Container Health and Service Management Improvements**
+- **Decision**: Implement comprehensive container fix scripts and diagnostic tools to address recurring container health issues.
+- **Rationale**: The trading system container was experiencing multiple issues including HTTP 403 errors, Redis connectivity problems, TensorFlow GPU detection failures, and supervisord service management issues. These problems were causing the container to be marked as unhealthy and preventing proper system operation.
+- **Implementation**:
+  - Created `fix_frontend_access.sh` to specifically address HTTP 403 errors when accessing the frontend
+  - Created `fix_all_container_issues.sh` to comprehensively fix all container issues including Redis, frontend, supervisord, and GPU detection
+  - Created `diagnose_container.sh` to provide detailed diagnostics and troubleshooting information
+  - Created `CONTAINER_FIX_README.md` with documentation on common issues and how to fix them
+- **Implications**:
+  - Improved container reliability and health status
+  - Simplified troubleshooting and issue resolution
+  - Provided clear documentation for future maintenance
+  - Ensured proper service startup and configuration
+  - Fixed permission issues with Redis data directories
+  - Addressed network configuration problems
+  - Improved GPU detection and configuration
+
 [2025-03-22 23:37:00] - **Component Testing and Verification Strategy**
 - **Decision**: Implement comprehensive testing for all major system components (TensorFlow, TensorRT, Redis, Prometheus).
 - **Rationale**: The system relies on multiple complex components that need to work together seamlessly. Verifying each component individually ensures we can identify and fix issues before they affect the entire system.
@@ -6,6 +23,9 @@
   - Created test_tensorrt.py for TensorRT model conversion and inference
   - Created test_redis.py for Redis connection and performance testing
   - Created test_prometheus.py for monitoring system verification
+   - Ensured Redis directories have proper permissions (chmod 777) to fix permission issues
+   - Removed conflicting TensorFlow packages from Dockerfile.unified to fix build issues
+
   - Documented results in test_results_summary.md
 - **Implications**:
   - Confirmed 8.78x speedup with TensorRT for inference tasks
@@ -279,3 +299,35 @@ Made several key architectural decisions for the production deployment of the tr
   - Better documentation for future maintenance
   - Ensured compatibility with NVIDIA GH200 Grace Hopper Superchips
   - Maintained TensorRT acceleration capabilities for inference optimization
+
+[2025-03-23 22:40:30] - **Dashboard UI Reorganization**
+- **Decision**: Rename "Components" card to "Connections" and reorganize API connections to be part of this card.
+- **Rationale**: The previous UI structure had API connections as a separate card nested inside the Components card, which created a confusing and malformed HTML structure. Consolidating these related elements improves UI organization and user experience.
+- **Implementation**:
+  - Renamed "Components" to "Connections" in the frontend dashboard
+  - Moved API connections to be part of the Connections card
+  - Fixed HTML structure issues in the dashboard
+  - Added section headers to distinguish between system components and API connections
+  - Added proper styling for the reorganized sections
+- **Implications**:
+  - Improved UI organization and clarity
+  - Fixed malformed HTML structure
+  - Better user experience with logical grouping of related elements
+  - Clearer distinction between system components and external API connections
+  - More maintainable frontend code structure
+[2025-03-23 22:55:01] - **Frontend Dashboard UI Reorganization**
+- **Decision**: Reorganize the frontend dashboard UI to properly display API connections within the Connections card and fix JavaScript function organization.
+- **Rationale**: The previous UI had API connections floating above the components container due to malformed HTML structure with nested cards. Additionally, there were JavaScript functions nested inside other functions and duplicate function calls that could cause errors.
+- **Implementation**:
+  - Restructured the "Connections" card to include both system components and API connections with clear section headers
+  - Fixed the updateApiStatuses function that was incorrectly nested inside updateComponents
+  - Fixed the fetchApiStatus function that was incorrectly nested inside fetchSystemStatus
+  - Removed duplicate fetchApiStatus calls in the polling section
+- **Implications**:
+  - Improved UI organization with all connections displayed in a single, well-structured card
+  - Better code maintainability with properly defined JavaScript functions
+  - Reduced risk of runtime errors from duplicate function definitions
+  - Enhanced user experience with clearer visual hierarchy in the dashboard
+  - Easier monitoring of all system connections in one place
+
+

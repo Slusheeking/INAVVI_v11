@@ -1,203 +1,141 @@
 #!/bin/bash
+# rebuild_container.sh
+# Script to rebuild and restart the trading system container with all fixes
+
 set -e
 
-echo "=== INAVVI Trading System Container Rebuild ==="
-echo "This script will rebuild and restart the trading system container with optimized TensorFlow and CUDA settings."
+echo "=== Trading System Container Rebuild Script ==="
+echo "This script will rebuild and restart the trading system container with all fixes"
 
-# Stop any running containers
-echo "Stopping existing containers..."
-docker stop -t 5 trading-system || true
-docker-compose -f docker-compose.unified.yml down -t 5
+# Check if Docker is running
+if ! docker info > /dev/null 2>&1; then
+  echo "Error: Docker is not running or you don't have permission to use it."
+  exit 1
+fi
 
-# Clean up any dangling images
+# Aggressively stop and remove any existing trading-system container
+echo "Checking for existing trading-system container..."
+if docker ps -a | grep -q trading-system; then
+  echo "Found existing trading-system container. Stopping it aggressively..."
+  # Try graceful stop first with short timeout
+  docker stop --time=10 trading-system || true
+  # Force kill if still running
+  docker kill trading-system 2>/dev/null || true
+  echo "Forcefully removing trading-system container..."
+  docker rm -f trading-system || true
+  # Double check if removed
+  if docker ps -a | grep -q trading-system; then
+    echo "Container still exists, using stronger force..."
+    docker rm -f trading-system || true
+    sleep 2
+    # Last resort - use low-level docker commands
+    docker container rm -f trading-system 2>/dev/null || true
+  fi
+  echo "Waiting to ensure cleanup is complete..."
+  sleep 3
+fi
+
+# Remove old fix files that are now consolidated into the Dockerfile
+echo "Removing old fix files that are now incorporated in the Dockerfile..."
+OLD_FILES=(
+  "fix_all_container_issues.sh"
+  "fix_container_issues.sh"
+  "fix_frontend_access.sh"
+  "fix_tf_gpu.py"
+  "fixed_startup.sh"
+  "Dockerfile.unified.fixed"
+  "Dockerfile.unified.original"
+  "rebuild_with_fixed_dockerfile.sh"
+  "CONTAINER_FIX_README.md"
+  "verify_tensorflow.py"
+  "test_tensorflow_gpu.py"
+  "test_tensorflow_gpu_direct.py"
+  "test_cupy.py"
+  "test_cupy_gpu.py"
+  "test_xgboost.py"
+  "rebuild_with_portfolio_updater.sh"
+)
+
+for file in "${OLD_FILES[@]}"; do
+  if [ -f "$file" ]; then
+    rm -f "$file" && echo "Removed: $file"
+  fi
+done
+
+# Remove any dangling images
 echo "Cleaning up dangling images..."
 docker image prune -f
 
-# Rebuild the container
-echo "Rebuilding the container with optimized settings..."
-if ! docker-compose -f docker-compose.unified.yml build --no-cache; then
-    echo "Build failed. Attempting fallback build with minimal dependencies..."
-    # Create a backup of the Dockerfile
-    cp Dockerfile.unified Dockerfile.unified.bak
-    
-    # Create a simplified version of the Dockerfile
-    cat > Dockerfile.unified << EOF
-# Pull the latest TensorFlow container with CUDA 12.4 support for NVIDIA GH200 Grace Hopper Superchips
-FROM nvcr.io/nvidia/tensorflow:24.02-tf2-py3
+# Remove existing network and recreate it
+echo "Removing existing trading-network if it exists..."
+docker network rm trading-network || true
+echo "Creating trading-network..."
+docker network create trading-network
 
-# Install required system packages including Redis and Prometheus
-RUN apt-get update && apt-get install -y --no-install-recommends \\
-    build-essential \\
-    wget \\
-    python3-dev \\
-    redis-server \\
-    prometheus \\
-    prometheus-node-exporter \\
-    supervisor \\
-    curl \\
-    libpq-dev \\
-    postgresql-client \\
-    git \\
-    vim \\
-    && rm -rf /var/lib/apt/lists/*
+# Forcefully rebuild the image first
+echo "Forcefully rebuilding the trading system container image..."
+docker-compose -f docker-compose.unified.yml build --no-cache trading-system
 
-# Install Redis Exporter
-RUN wget https://github.com/oliver006/redis_exporter/releases/download/v1.54.0/redis_exporter-v1.54.0.linux-arm64.tar.gz && \\
-    tar xzf redis_exporter-v1.54.0.linux-arm64.tar.gz && \\
-    mv redis_exporter-v1.54.0.linux-arm64/redis_exporter /usr/local/bin/ && \\
-    rm -rf redis_exporter-v1.54.0.linux-arm64*
+# Start the container with the updated configuration
+echo "Starting the trading system container with all fixes..."
+docker-compose -f docker-compose.unified.yml up -d --force-recreate --remove-orphans
 
-# Install core Python packages
-RUN pip install --upgrade pip && \\
-    pip install --no-cache-dir \\
-    pandas \\
-    numpy \\
-    requests \\
-    redis \\
-    urllib3 \\
-    aiohttp \\
-    websockets \\
-    prometheus_client
-
-# Create working directories
-WORKDIR /app
-RUN mkdir -p /app/models /app/data /app/logs /app/config
-
-# Copy configuration files
-COPY prometheus/prometheus.yml /etc/prometheus/prometheus.yml
-COPY redis/redis.conf /etc/redis/redis.conf
-
-# Configure supervisord to manage services
-COPY <<EOT /etc/supervisor/conf.d/services.conf
-[supervisord]
-nodaemon=true
-logfile=/var/log/supervisor/supervisord.log
-logfile_maxbytes=50MB
-logfile_backups=5
-loglevel=info
-
-[program:redis]
-command=/usr/bin/redis-server /etc/redis/redis.conf
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/redis/redis-server.err.log
-stdout_logfile=/var/log/redis/redis-server.out.log
-priority=10
-
-[program:prometheus]
-command=/usr/bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/prometheus.err.log
-stdout_logfile=/var/log/prometheus.out.log
-priority=20
-
-[program:redis_exporter]
-command=/usr/local/bin/redis_exporter
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/redis_exporter.err.log
-stdout_logfile=/var/log/redis_exporter.out.log
-priority=30
-EOT
-
-# Create directories and set permissions
-RUN mkdir -p /var/log/supervisor && \\
-    mkdir -p /var/log/redis && \\
-    mkdir -p /var/log/prometheus && \\
-    mkdir -p /var/run/redis && \\
-    mkdir -p /data && \\
-    touch /var/log/redis/redis-server.err.log && \\
-    touch /var/log/redis/redis-server.out.log && \\
-    touch /var/log/prometheus.err.log && \\
-    touch /var/log/prometheus.out.log && \\
-    touch /var/log/redis_exporter.err.log && \\
-    touch /var/log/redis_exporter.out.log && \\
-    chown -R root:root /var/log/redis && \\
-    chown -R root:root /var/run/redis && \\
-    chown -R root:root /data && \\
-    chmod 755 /var/run/redis && \\
-    chmod 755 /data
-
-# Create startup script
-COPY <<EOT /app/startup.sh
-#!/bin/bash
-set -e
-
-# Wait for Redis to be ready
-echo "Waiting for Redis to be ready..."
-until redis-cli ping; do
-  sleep 1
-done
-echo "Redis is ready!"
-
-echo "Starting services with supervisord..."
-exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
-EOT
-
-RUN chmod +x /app/startup.sh
-
-# Expose ports
-EXPOSE 8888 6380 9090 9121
-
-# Start all services using the startup script
-CMD ["/app/startup.sh"]
-EOF
-    
-    # Try building again with the simplified Dockerfile
-    if ! docker-compose -f docker-compose.unified.yml build --no-cache; then
-        echo "Fallback build also failed. Please check the logs for details."
-        # Restore original Dockerfile
-        mv Dockerfile.unified.bak Dockerfile.unified
-        exit 1
-    fi
-    
-    # Restore original Dockerfile
-    mv Dockerfile.unified.bak Dockerfile.unified
-    echo "Fallback build successful (with minimal dependencies)."
-else
-    echo "Build successful with all components."
-fi
-
-# Start the container
-echo "Starting the container..."
-docker-compose -f docker-compose.unified.yml up -d
-
-# Wait for container to be ready
-echo "Waiting for container to be ready..."
+# Wait for the container to start
+echo "Waiting for container to start..."
 sleep 10
 
-# Check if container is running
-if docker ps | grep -q trading-system; then
-    echo "Container is running successfully!"
-    
-    # Create directory for CuPy cache if it doesn't exist
-    docker exec -it trading-system bash -c "mkdir -p /app/data/cache/cupy && chmod 777 /app/data/cache/cupy"
-    
-    # Run GPU status check
-    echo "Running GPU status check..."
-    docker exec -it trading-system bash -c "cd /app/project && python3 gpu_status.py"
-    
-    # Verify TensorFlow
-    echo "Verifying TensorFlow..."
-    if docker exec -it trading-system python3 /app/verify_tensorflow.py; then
-        echo "TensorFlow verification successful!"
-        
-        # Verify TensorRT
-        echo "Verifying TensorRT..."
-        if docker exec -it trading-system python3 -c "import tensorrt; print(f'TensorRT version: {tensorrt.__version__}')"; then
-            echo "TensorRT verification successful!"
-        else
-            echo "WARNING: TensorRT verification failed. The system will still function but without TensorRT acceleration."
-        fi
-    else
-        echo "WARNING: TensorFlow verification failed. Check logs for details."
-    fi
-    
-    echo "=== Rebuild Complete ==="
-    echo "The trading system container has been rebuilt with optimized settings."
-    echo "You can access Jupyter Lab at http://localhost:8888"
-else
-    echo "Error: Container failed to start properly."
-    echo "Check logs with: docker-compose -f docker-compose.unified.yml logs"
+# Check container status
+CONTAINER_STATUS=$(docker inspect --format='{{.State.Status}}' trading-system 2>/dev/null || echo "not running")
+echo "Container status: $CONTAINER_STATUS"
+
+if [ "$CONTAINER_STATUS" != "running" ]; then
+  echo "Error: Container failed to start properly."
+  echo "Container logs:"
+  docker logs --tail 50 trading-system
+  exit 1
 fi
+
+# Check container health
+HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' trading-system 2>/dev/null || echo "no health check")
+echo "Container health status: $HEALTH_STATUS"
+
+# Display container logs
+echo "Recent container logs:"
+docker logs --tail 20 trading-system
+
+echo "=== Rebuild Complete ==="
+echo "The container should now be running with all fixes applied."
+
+# Ask if the user wants to open the frontend in a browser
+echo "Would you like to open the frontend in a browser? (y/n)"
+read -r open_browser
+
+if [[ "$open_browser" == "y" || "$open_browser" == "Y" ]]; then
+  # Wait a moment for the frontend to be fully ready
+  echo "Launching frontend in browser..."
+  sleep 5
+  
+  # Detect operating system and open the browser accordingly
+  if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    # Linux
+    xdg-open http://127.0.0.1:5000
+  elif [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    open http://127.0.0.1:5000
+  elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
+    # Windows
+    start http://127.0.0.1:5000
+  else
+    echo "Unsupported operating system detected."
+    echo "Please manually open http://127.0.0.1:5000 in your browser."
+  fi
+  
+  echo "Frontend should now be opening in your browser."
+else
+  echo "You can access the frontend at http://127.0.0.1:5000"
+  fi
+  
+  echo "You can access Jupyter Lab at http://localhost:8888"
+  echo "Monitor logs with: docker logs -f trading-system"
+  echo "Monitor portfolio updater logs with: docker logs -f trading-system | grep 'update_portfolio'"
+  echo "Portfolio data is being updated from Alpaca every minute and stored in Redis"

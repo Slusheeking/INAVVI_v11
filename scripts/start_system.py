@@ -132,9 +132,11 @@ def initialize_slack_notifier():
                 channel=slack_notifier.notification_channel,
             )
             if success:
-                logger.info("Slack notifier initialized and connected successfully")
+                logger.info(
+                    "Slack notifier initialized and connected successfully")
             else:
-                logger.warning("Slack notifier initialized but test message failed")
+                logger.warning(
+                    "Slack notifier initialized but test message failed")
         else:
             logger.warning(
                 "Slack integration not available - notifications will be logged only",
@@ -171,7 +173,8 @@ def check_redis():
         try:
             # Try to start Redis using the configuration file
             redis_conf = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)), "redis", "redis.con",
+                os.path.dirname(os.path.dirname(__file__)
+                                ), "redis", "redis.conf",
             )
             if os.path.exists(redis_conf):
                 subprocess.Popen(
@@ -192,7 +195,8 @@ def check_redis():
                 host=os.environ.get("REDIS_HOST", "localhost"),
                 port=int(os.environ.get("REDIS_PORT", 6380)),
                 db=int(os.environ.get("REDIS_DB", 0)),
-                password=os.environ.get("REDIS_PASSWORD", "trading_system_2025"),
+                password=os.environ.get(
+                    "REDIS_PASSWORD", "trading_system_2025"),
                 username=os.environ.get("REDIS_USERNAME", "default"),
                 socket_timeout=1,
             )
@@ -257,12 +261,14 @@ def check_prometheus() -> bool:
             time.sleep(2)
 
             # Check if Prometheus is now running
-            response = requests.get("http://localhost:9090/-/healthy", timeout=1)
+            response = requests.get(
+                "http://localhost:9090/-/healthy", timeout=1)
             if response.status_code == 200:
                 logger.info("Prometheus started successfully")
 
                 if slack_notifier:
-                    slack_notifier.send_success("Prometheus started successfully")
+                    slack_notifier.send_success(
+                        "Prometheus started successfully")
 
                 return True
             logger.warning("Prometheus failed to start")
@@ -278,7 +284,8 @@ def check_prometheus() -> bool:
             logger.exception(error_msg)
 
             if slack_notifier:
-                slack_notifier.send_warning(f"Prometheus startup failed: {error_msg}")
+                slack_notifier.send_warning(
+                    f"Prometheus startup failed: {error_msg}")
 
             return False
 
@@ -297,7 +304,8 @@ def start_monitoring_system(redis_client=None):
         logger.info("Monitoring system started successfully")
 
         if slack_notifier:
-            slack_notifier.send_success("Monitoring system started successfully")
+            slack_notifier.send_success(
+                "Monitoring system started successfully")
 
         return monitoring_system
     except Exception as e:
@@ -305,7 +313,8 @@ def start_monitoring_system(redis_client=None):
         logger.exception(error_msg)
 
         if slack_notifier:
-            slack_notifier.send_error("Monitoring system startup failed", error_msg)
+            slack_notifier.send_error(
+                "Monitoring system startup failed", error_msg)
 
         return None
 
@@ -319,7 +328,8 @@ def start_individual_components(redis_client=None, use_gpu=True) -> bool | None:
         logger.info("Starting data pipeline...")
         from data_pipeline import DataPipeline
 
-        data_pipeline = DataPipeline(redis_client=redis_client, use_gpu=use_gpu)
+        data_pipeline = DataPipeline(
+            redis_client=redis_client, use_gpu=use_gpu)
         if hasattr(data_pipeline, "start"):
             data_pipeline.start()
         components["data_pipeline"] = data_pipeline
@@ -332,7 +342,8 @@ def start_individual_components(redis_client=None, use_gpu=True) -> bool | None:
         logger.info("Starting ML engine...")
         from ml_engine import MLModelTrainer
 
-        ml_engine = MLModelTrainer(redis_client=redis_client, data_loader=data_pipeline)
+        ml_engine = MLModelTrainer(
+            redis_client=redis_client, data_loader=data_pipeline)
         if hasattr(ml_engine, "start"):
             ml_engine.start()
         components["ml_engine"] = ml_engine
@@ -354,7 +365,8 @@ def start_individual_components(redis_client=None, use_gpu=True) -> bool | None:
         logger.info("Stock selection engine started successfully")
 
         if slack_notifier:
-            slack_notifier.send_success("Stock selection engine started successfully")
+            slack_notifier.send_success(
+                "Stock selection engine started successfully")
 
         # Start trading engine
         logger.info("Starting trading engine...")
@@ -425,7 +437,8 @@ def stop_all_components() -> None:
                 logger.exception(f"Error stopping {name}: {e!s}")
 
                 if slack_notifier:
-                    slack_notifier.send_warning(f"Error stopping {name}: {e!s}")
+                    slack_notifier.send_warning(
+                        f"Error stopping {name}: {e!s}")
 
     # Stop monitoring system
     if monitoring_system and hasattr(monitoring_system, "stop"):
@@ -435,7 +448,8 @@ def stop_all_components() -> None:
             logger.info("Monitoring system stopped successfully")
 
             if slack_notifier:
-                slack_notifier.send_info("Monitoring system stopped successfully")
+                slack_notifier.send_info(
+                    "Monitoring system stopped successfully")
         except Exception as e:
             logger.exception(f"Error stopping monitoring system: {e!s}")
 
@@ -457,7 +471,8 @@ def stop_all_components() -> None:
             logger.exception(f"Error stopping unified system: {e!s}")
 
             if slack_notifier:
-                slack_notifier.send_warning(f"Error stopping unified system: {e!s}")
+                slack_notifier.send_warning(
+                    f"Error stopping unified system: {e!s}")
 
     # Final notification
     if slack_notifier:
@@ -576,19 +591,24 @@ def run_health_check(redis_client=None):
         )
 
         if components_healthy and services_healthy and system_healthy:
-            slack_notifier.send_success("System health check: All systems operational")
+            slack_notifier.send_success(
+                "System health check: All systems operational")
         else:
             # Create a detailed report
-            slack_notifier.send_report("System Health Check Report", health_status)
+            slack_notifier.send_report(
+                "System Health Check Report", health_status)
 
     return health_status
 
 
 def parse_arguments():
     """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description="Unified Trading System Starter")
-    parser.add_argument("--config", type=str, help="Path to configuration file")
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser = argparse.ArgumentParser(
+        description="Unified Trading System Starter")
+    parser.add_argument("--config", type=str,
+                        help="Path to configuration file")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable debug logging")
     parser.add_argument(
         "--no-gpu", action="store_true", help="Disable GPU acceleration",
     )

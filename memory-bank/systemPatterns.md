@@ -1,3 +1,21 @@
+[2025-03-23 18:32:30] - **Container Health Management Patterns**
+
+Established the following patterns for container health management:
+
+1. **Diagnostic-First Pattern**: Always diagnose container issues before attempting fixes. The `diagnose_container.sh` script provides comprehensive diagnostics to identify specific issues.
+
+2. **Targeted Fix Pattern**: Apply specific fixes for known issues rather than rebuilding the entire container. The `fix_frontend_access.sh` script demonstrates this pattern by focusing only on frontend access issues.
+
+3. **Comprehensive Fix Pattern**: When multiple issues are present, apply a comprehensive fix that addresses all issues in the correct order. The `fix_all_container_issues.sh` script implements this pattern.
+
+4. **Service Isolation Pattern**: Configure each service with its own log files and error handling to simplify troubleshooting. The supervisord configuration demonstrates this pattern.
+
+5. **Permission Remediation Pattern**: Ensure proper permissions for data directories and log files to prevent common container issues. This pattern is implemented in all fix scripts.
+
+6. **Network Configuration Pattern**: Properly configure network settings including hosts file and port mappings to ensure services can communicate. This pattern is implemented in the fix scripts.
+
+7. **Documentation-Driven Troubleshooting Pattern**: Provide comprehensive documentation on common issues and their fixes. The `CONTAINER_FIX_README.md` file implements this pattern.
+
 [2025-03-22 20:25:10] - Production Management Patterns
 
 Established the following patterns for production management:
@@ -83,6 +101,7 @@ Established the following patterns for production management:
 - Continuous monitoring of system health
 - Metrics collection and aggregation
 - Threshold-based alerting
+- Historical metrics for trend analysis
 
 [2025-03-21 06:34:15] - **Memory Bank Activation Pattern**
 - Automatic memory bank activation at session start
@@ -90,7 +109,6 @@ Established the following patterns for production management:
 - Shell script wrapper for easy execution
 - Custom mode configuration for memory bank functionality
 - Status reporting with active/inactive indicators
-- Historical metrics for trend analysis
 
 [2025-03-21 17:15:30] - **Standardized API Client Pattern**
 - Use of standardized client classes from api_clients.py
@@ -123,6 +141,7 @@ Established the following patterns for production management:
 - Clear separation of API keys from source code
 - Comprehensive documentation for key management
 - Standardized environment variable access across all components
+
 [2025-03-23 04:41:00] - **Isolated Environment Pattern**
 - Virtual environment for each component to isolate dependencies
 - Requirements.txt files for explicit dependency management
@@ -141,5 +160,22 @@ Established the following patterns for production management:
 - Centralized API key management for all external services
 - Consistent error handling across different API providers
 
+[2025-03-23 22:41:00] - **UI Organization Pattern**
+- Logical grouping of related UI elements under unified cards
+- Clear section headers to distinguish between different component types
+- Consistent styling and layout across all dashboard cards
+- Proper HTML structure with no nested card elements
+- Semantic naming of UI components to reflect their actual purpose
+- Responsive design that maintains clarity on different screen sizes
+- Status indicators with consistent color coding across all components
+[2025-03-23 22:55:30] - **Frontend UI Organization Pattern**
+- **Logical Component Grouping**: Related UI elements are grouped under unified cards with clear section headers
+- **Semantic HTML Structure**: Proper HTML structure with no nested card elements for better maintainability
+- **Visual Hierarchy**: Clear visual distinction between different types of components using section headers
+- **Status Consistency**: Uniform status indicators and styling across all component types
+- **Code Organization**: JavaScript functions properly defined outside of other functions to prevent scope issues
+- **Function Deduplication**: Elimination of duplicate function definitions and calls to prevent runtime errors
+
+This pattern ensures a clean, organized UI that makes it easy to monitor system status while maintaining proper code structure for better maintainability.
 
 

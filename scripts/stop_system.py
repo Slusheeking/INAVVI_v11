@@ -38,7 +38,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.FileHandler(
-            os.path.join(os.environ.get("LOGS_DIR", "./logs"), "system_stop.log"),
+            os.path.join(os.environ.get(
+                "LOGS_DIR", "./logs"), "system_stop.log"),
         ),
         logging.StreamHandler(sys.stdout),
     ],
@@ -82,9 +83,11 @@ def initialize_slack_notifier():
                 channel=slack_notifier.notification_channel,
             )
             if success:
-                logger.info("Slack notifier initialized and connected successfully")
+                logger.info(
+                    "Slack notifier initialized and connected successfully")
             else:
-                logger.warning("Slack notifier initialized but test message failed")
+                logger.warning(
+                    "Slack notifier initialized but test message failed")
         else:
             logger.warning(
                 "Slack integration not available - notifications will be logged only",
@@ -112,11 +115,13 @@ def find_system_processes():
 
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
-            cmdline = " ".join(proc.info["cmdline"]) if proc.info["cmdline"] else ""
+            cmdline = " ".join(proc.info["cmdline"]
+                               ) if proc.info["cmdline"] else ""
             for process_name in process_names:
                 if process_name in cmdline:
                     system_processes.append(
-                        {"pid": proc.pid, "name": proc.info["name"], "cmdline": cmdline},
+                        {"pid": proc.pid,
+                            "name": proc.info["name"], "cmdline": cmdline},
                     )
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
@@ -166,7 +171,7 @@ def stop_redis() -> bool | None:
             host=os.environ.get("REDIS_HOST", "localhost"),
             port=int(os.environ.get("REDIS_PORT", 6380)),
             db=int(os.environ.get("REDIS_DB", 0)),
-            password=os.environ.get("REDIS_PASSWORD", ""),
+            password=os.environ.get("REDIS_PASSWORD", "trading_system_2025"),
             username=os.environ.get("REDIS_USERNAME", "default"),
             socket_timeout=1,
         )
@@ -190,7 +195,8 @@ def stop_redis() -> bool | None:
                     logger.info("Redis server stopped forcefully")
 
                     if slack_notifier:
-                        slack_notifier.send_warning("Redis server stopped forcefully")
+                        slack_notifier.send_warning(
+                            "Redis server stopped forcefully")
 
                     return True
 
@@ -209,7 +215,8 @@ def stop_prometheus() -> bool:
     """Stop Prometheus if running"""
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
-            cmdline = " ".join(proc.info["cmdline"]) if proc.info["cmdline"] else ""
+            cmdline = " ".join(proc.info["cmdline"]
+                               ) if proc.info["cmdline"] else ""
             if "prometheus" in cmdline and "--config.file" in cmdline:
                 stop_process(proc.info["pid"])
                 logger.info("Prometheus stopped")
@@ -237,7 +244,7 @@ def stop_unified_system(force=False) -> bool | None:
             host=os.environ.get("REDIS_HOST", "localhost"),
             port=int(os.environ.get("REDIS_PORT", 6380)),
             db=int(os.environ.get("REDIS_DB", 0)),
-            password=os.environ.get("REDIS_PASSWORD", ""),
+            password=os.environ.get("REDIS_PASSWORD", "trading_system_2025"),
             username=os.environ.get("REDIS_USERNAME", "default"),
             socket_timeout=1,
         )
@@ -249,7 +256,8 @@ def stop_unified_system(force=False) -> bool | None:
         )
 
         if system_running:
-            logger.info("Unified system is running, attempting graceful shutdown...")
+            logger.info(
+                "Unified system is running, attempting graceful shutdown...")
 
             # Set shutdown flag in Redis
             redis_client.hset("system:status", "shutdown_requested", "true")
@@ -284,7 +292,8 @@ def stop_unified_system(force=False) -> bool | None:
         system_processes = find_system_processes()
 
         if system_processes:
-            logger.info(f"Found {len(system_processes)} system processes to stop")
+            logger.info(
+                f"Found {len(system_processes)} system processes to stop")
 
             for process in system_processes:
                 stop_process(process["pid"], force=force)
@@ -309,14 +318,17 @@ def stop_unified_system(force=False) -> bool | None:
 
 def parse_arguments():
     """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description="Unified Trading System Stopper")
+    parser = argparse.ArgumentParser(
+        description="Unified Trading System Stopper")
     parser.add_argument(
         "--force",
         action="store_true",
         help="Force kill processes instead of graceful termination",
     )
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("--no-redis", action="store_true", help="Skip Redis shutdown")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable debug logging")
+    parser.add_argument("--no-redis", action="store_true",
+                        help="Skip Redis shutdown")
     parser.add_argument(
         "--no-prometheus", action="store_true", help="Skip Prometheus shutdown",
     )

@@ -1,0 +1,26 @@
+
+================
+== TensorFlow ==
+================
+
+NVIDIA Release 24.02-tf2 (build 82396426)
+TensorFlow Version 2.15.0
+Container image Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Copyright 2017-2024 The TensorFlow Authors.  All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+Applying Redis overcommit_memory setting...
+sysctl: setting key "vm.overcommit_memory", ignoring: Read-only file system
+Starting Redis service...
+Starting redis-server: 125:C 23 Mar 2025 18:07:36.484 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+125:C 23 Mar 2025 18:07:36.484 # Redis version=6.0.16, bits=64, commit=00000000, modified=0, pid=125, just started
+125:C 23 Mar 2025 18:07:36.484 # Configuration loaded
+125:M 23 Mar 2025 18:07:36.485 * Running mode=standalone, port=6380.
+125:M 23 Mar 2025 18:07:36.485 # Server initialized
+125:M 23 Mar 2025 18:07:36.485 # WARNING overcommit_memory is set to 0! Background save may fail under low memory condition. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+125:M 23 Mar 2025 18:07:36.486 * Ready to accept connections
